@@ -13,10 +13,19 @@
   header input { flex:1; max-width:480px; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:6px 10px; }
   button { background:var(--acc); color:#fff; border:0; border-radius:4px; padding:6px 12px; cursor:pointer; }
   button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  button.small { padding:2px 8px; font-size:12px; }
+  button.danger { background:var(--d); }
   button:disabled { opacity:.5; cursor:default; }
   #status { color:var(--dim); margin-left:8px; }
   main { display:grid; grid-template-columns:340px 1fr; height:calc(100vh - 53px); }
-  #timeline { border-right:1px solid var(--line); overflow:auto; }
+  #left { border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
+  #changes { border-bottom:2px solid var(--line); max-height:45%; overflow:auto; flex:0 0 auto; }
+  #changes .ph { display:flex; gap:8px; align-items:center; padding:8px 14px; position:sticky; top:0; background:var(--panel); border-bottom:1px solid var(--line); }
+  #changes .ph b { flex:1; }
+  #changes table { margin:0; }
+  #changes td, #changes th { padding:3px 6px; font-size:12px; }
+  #changes .sum { padding:6px 14px; font-size:12px; color:var(--dim); }
+  #timeline { overflow:auto; flex:1; }
   .snap { padding:10px 14px; border-bottom:1px solid var(--line); cursor:pointer; }
   .snap:hover { background:#20242b; }
   .snap.sel { background:#232a36; border-left:3px solid var(--acc); }
@@ -31,21 +40,45 @@
   table { border-collapse:collapse; width:100%; margin:8px 0 14px; }
   td, th { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line); font-size:13px; }
   th { color:var(--dim); font-weight:normal; }
-  tr.row { cursor:pointer; }
+  th.cb, td.cb { width:26px; padding-right:0; }
+  tr.row { cursor:pointer; user-select:none; }
   tr.row:hover { background:#20242b; }
-  tr.row.sel { background:#232a36; }
+  tr.row.sel { background:#263247; }
+  tr.row.hist { outline:1px solid var(--acc); }
+  .selcount { color:var(--acc); font-size:12px; }
   .k { font-weight:700; width:24px; }
   .k.A { color:var(--a);} .k.M { color:var(--m);} .k.R { color:var(--r);} .k.D { color:var(--d);}
   #history { border-top:1px solid var(--line); margin-top:16px; padding-top:12px; }
   .versions { display:flex; gap:12px; overflow-x:auto; padding:6px 0; }
-  .ver { min-width:150px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px; font-size:12px; }
+  .ver { min-width:150px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px; font-size:12px; cursor:context-menu; }
   .ver.changed { border-color:var(--m); }
   .ver img { width:128px; height:128px; object-fit:contain; background:#0d0f12; border-radius:4px; display:block; margin-bottom:6px; }
   .ver .nothumb { width:128px; height:128px; display:flex; align-items:center; justify-content:center; color:var(--dim); background:#0d0f12; border-radius:4px; margin-bottom:6px; }
   .warn { background:#3a2a12; border:1px solid var(--m); border-radius:6px; padding:8px 12px; margin:8px 0; }
-  .err { background:#3a1a1a; border:1px solid var(--d); border-radius:6px; padding:8px 12px; margin:8px 0; }
+  .err { background:#3a1a1a; border:1px solid var(--d); border-radius:6px; padding:8px 12px; margin:8px 0; color:#ffb3ad; }
+  .note { background:#1a2a3a; border:1px solid var(--acc); border-radius:6px; padding:8px 12px; margin:8px 0; }
   .ok { color:var(--a); }
   #restore { margin-top:16px; }
+  .hint { font-size:12px; color:var(--dim); }
+  /* 컨텍스트 메뉴 */
+  #ctx { display:none; position:fixed; z-index:50; min-width:220px; background:var(--panel); border:1px solid var(--line); border-radius:6px; box-shadow:0 6px 20px #000a; padding:4px 0; }
+  #ctx .item { padding:6px 14px; cursor:pointer; font-size:13px; }
+  #ctx .item:hover { background:#263247; }
+  #ctx .item.disabled { color:var(--dim); cursor:default; }
+  #ctx .item.disabled:hover { background:transparent; }
+  #ctx .sep { border-top:1px solid var(--line); margin:4px 0; }
+  /* 모달 */
+  #modal { display:none; position:fixed; inset:0; z-index:40; background:#000a; align-items:center; justify-content:center; }
+  #modalBox { background:var(--panel); border:1px solid var(--line); border-radius:8px; width:min(760px, 92vw); max-height:88vh; overflow:auto; padding:16px 20px; }
+  #modalBox h3 { margin:0 0 8px; font-size:15px; }
+  #modalBox input { width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:6px 10px; margin:8px 0; }
+  .btns { display:flex; gap:8px; justify-content:flex-end; margin-top:12px; }
+  ul.dirty { margin:6px 0 0; padding-left:18px; }
+  /* 토스트 */
+  #toast { position:fixed; right:16px; bottom:16px; z-index:60; display:flex; flex-direction:column; gap:6px; }
+  #toast div { background:#233524; border:1px solid var(--a); border-radius:6px; padding:8px 14px; box-shadow:0 4px 14px #0008; animation:fade 4s forwards; }
+  #toast div.bad { background:#3a1a1a; border-color:var(--d); }
+  @keyframes fade { 0%,80% { opacity:1; } 100% { opacity:0; } }
 </style>
 </head>
 <body>
@@ -57,23 +90,37 @@
   <span id="status"></span>
 </header>
 <main>
-  <div id="timeline"></div>
-  <div id="detail"><p class="dim">왼쪽에서 스냅샷을 선택하세요.</p></div>
+  <div id="left">
+    <div id="changes" data-list="changes">
+      <div class="ph"><b>현재 변경사항</b><span class="selcount"></span><button id="reloadStatus" class="ghost small">새로고침</button></div>
+      <div id="changesBody"><p class="dim" style="padding:10px 14px">불러오는 중…</p></div>
+    </div>
+    <div id="timeline"></div>
+  </div>
+  <div id="detail" data-list="detail"><p class="dim">왼쪽에서 스냅샷을 선택하세요.</p></div>
 </main>
+<div id="ctx"></div>
+<div id="modal"><div id="modalBox"></div></div>
+<div id="toast"></div>
 <script>
 const KIND = {added:'추가', modified:'수정', moved:'이동', deleted:'삭제'};
 const ORDER = ['modified','added','moved','deleted'];
-let selected = null, selectedRel = null;
+let selected = null, selectedRel = null, headId = null;
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const status = t => { $('#status').textContent = t; };
+const JSONH = {'Content-Type': 'application/json'};
 
 async function api(path, opt) {
   const r = await fetch(path, opt);
   const j = await r.json().catch(() => ({error: r.statusText}));
-  if (!r.ok) throw new Error(j.error || r.status);
+  if (!r.ok) { const e = new Error(j.error || String(r.status)); e.status = r.status; e.body = j; throw e; }
   return j;
+}
+function toast(msg, bad) {
+  const d = document.createElement('div'); d.textContent = msg; if (bad) d.className = 'bad';
+  $('#toast').appendChild(d); setTimeout(() => d.remove(), 4200);
 }
 function countsText(c) {
   return ORDER.filter(k => c[k]).map(k => `${KIND[k]} ${c[k]}`).join(' · ') || '변경 없음';
@@ -85,10 +132,132 @@ function badges(bc) {
   }).join('');
 }
 
+// ---- 다중 선택 ----
+const sel = {changes: new Set(), detail: new Set()};
+const anchor = {changes: null, detail: null};
+let activeList = 'changes';
+const listEl = name => document.querySelector(`[data-list="${name}"]`);
+const listRows = name => [...listEl(name).querySelectorAll('tr.row')];
+function paintSel(name) {
+  const s = sel[name], rows = listRows(name);
+  rows.forEach(tr => tr.classList.toggle('sel', s.has(tr.dataset.rel)));
+  const cnt = listEl(name).querySelector('.selcount');
+  if (cnt) cnt.textContent = s.size ? `${s.size}개 선택` : '';
+  const cb = listEl(name).querySelector('.selall');
+  if (cb) { cb.checked = rows.length > 0 && s.size === rows.length; cb.indeterminate = s.size > 0 && s.size < rows.length; }
+}
+function rowClick(name, tr, e) {
+  activeList = name;
+  const rels = listRows(name).map(t => t.dataset.rel), rel = tr.dataset.rel, s = sel[name];
+  if (e.shiftKey && anchor[name] != null && rels.includes(anchor[name])) {
+    const a = rels.indexOf(anchor[name]), b = rels.indexOf(rel), lo = Math.min(a, b), hi = Math.max(a, b);
+    if (!e.ctrlKey) s.clear();
+    for (let i = lo; i <= hi; i++) s.add(rels[i]);
+  } else {
+    s.has(rel) ? s.delete(rel) : s.add(rel);
+    anchor[name] = rel;
+  }
+  paintSel(name);
+}
+function selectAll(name, on) {
+  const s = sel[name]; s.clear();
+  if (on) listRows(name).forEach(t => s.add(t.dataset.rel));
+  paintSel(name);
+}
+function pruneSel(name) {  // 목록 갱신 후 사라진 항목 제거
+  const have = new Set(listRows(name).map(t => t.dataset.rel));
+  for (const r of [...sel[name]]) if (!have.has(r)) sel[name].delete(r);
+}
+function bindList(name, onRow) {
+  const el = listEl(name);
+  el.querySelectorAll('tr.row').forEach(tr => {
+    tr.onclick = e => { rowClick(name, tr, e); if (onRow) onRow(tr); };
+    tr.oncontextmenu = e => {
+      e.preventDefault(); activeList = name;
+      if (!sel[name].has(tr.dataset.rel)) { if (!e.ctrlKey) sel[name].clear(); sel[name].add(tr.dataset.rel); anchor[name] = tr.dataset.rel; paintSel(name); }
+      openMenu(e.clientX, e.clientY, menuFor(name));
+    };
+  });
+  const cb = el.querySelector('.selall');
+  if (cb) cb.onchange = () => { activeList = name; selectAll(name, cb.checked); };
+  pruneSel(name); paintSel(name);
+}
+
+// ---- 컨텍스트 메뉴 ----
+function openMenu(x, y, items) {
+  const m = $('#ctx'); m.innerHTML = '';
+  for (const it of items) {
+    if (it === '-') { const s = document.createElement('div'); s.className = 'sep'; m.appendChild(s); continue; }
+    const d = document.createElement('div');
+    d.className = 'item' + (it.disabled ? ' disabled' : ''); d.textContent = it.label;
+    if (!it.disabled) d.onclick = () => { closeMenu(); it.run(); };
+    m.appendChild(d);
+  }
+  m.style.display = 'block'; m.style.left = '0px'; m.style.top = '0px';
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(0, Math.min(x, innerWidth - r.width - 4)) + 'px';
+  m.style.top = Math.max(0, Math.min(y, innerHeight - r.height - 4)) + 'px';
+}
+function closeMenu() { $('#ctx').style.display = 'none'; }
+document.addEventListener('mousedown', e => { if (!$('#ctx').contains(e.target)) closeMenu(); });
+window.addEventListener('resize', closeMenu);
+document.addEventListener('scroll', closeMenu, true);
+
+function menuFor(name) {
+  const rels = [...sel[name]], n = rels.length;
+  if (name === 'changes') return [
+    {label: `선택한 것만 올리기 (${n})`, disabled: !n, run: () => snapFlow(rels)},
+    {label: '전부 올리기', run: () => snapFlow([])},
+    '-',
+    {label: `선택한 것 되돌리기 — 마지막 스냅샷 #${headId ?? '-'} 상태로 (${n})`, disabled: !n || headId == null, run: () => restoreFlow(headId, rels)},
+  ];
+  return [
+    {label: `선택한 애셋을 이 시점(#${selected})으로 되돌리기 (${n})`, disabled: !n || selected == null, run: () => restoreFlow(selected, rels)},
+    {label: `이 스냅샷(#${selected}) 전체로 되돌리기`, disabled: selected == null, run: () => restoreFlow(selected, [])},
+  ];
+}
+$('#changes').oncontextmenu = e => {
+  if (e.target.closest('tr.row')) return;  // 행은 bindList 에서 처리
+  e.preventDefault(); activeList = 'changes'; openMenu(e.clientX, e.clientY, menuFor('changes'));
+};
+
+// ---- 모달 ----
+function openModal(html) { $('#modalBox').innerHTML = html; $('#modal').style.display = 'flex'; }
+function closeModal() { $('#modal').style.display = 'none'; $('#modalBox').innerHTML = ''; }
+const modalOpen = () => $('#modal').style.display === 'flex';
+$('#modal').onmousedown = e => { if (e.target === $('#modal')) closeModal(); };
+function promptMessage(title, hint) {
+  return new Promise(res => {
+    openModal(`<h3>${esc(title)}</h3><div class="hint">${esc(hint)}</div>
+      <input id="mmsg" placeholder="스냅샷 메시지" maxlength="200" value="${esc($('#msg').value)}">
+      <div class="btns"><button id="mcancel" class="ghost">취소</button><button id="mok">올리기</button></div>`);
+    const inp = $('#mmsg'); inp.focus();
+    const done = v => { closeModal(); res(v); };
+    $('#mcancel').onclick = () => done(null);
+    $('#mok').onclick = () => { const v = inp.value.trim(); if (!v) { inp.focus(); return; } done(v); };
+    inp.onkeydown = e => { if (e.key === 'Enter') $('#mok').click(); };
+  });
+}
+
+// ---- 키보드 ----
+document.addEventListener('keydown', e => {
+  const inInput = /^(INPUT|TEXTAREA)$/.test(e.target.tagName);
+  if (e.key === 'Escape') {
+    if ($('#ctx').style.display === 'block') { closeMenu(); return; }
+    if (modalOpen()) { closeModal(); return; }
+    selectAll('changes', false); selectAll('detail', false); return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && !inInput && !modalOpen()) {
+    e.preventDefault(); selectAll(activeList, true);
+  }
+});
+
+// ---- 데이터 ----
 async function loadLog() {
   status('불러오는 중…');
   try {
     const log = await api('/api/log');
+    headId = log.length ? Math.max(...log.map(s => s.id)) : null;
     const tl = $('#timeline');
     tl.innerHTML = log.length ? '' : '<p class="dim" style="padding:14px">스냅샷 없음</p>';
     for (const s of log) {
@@ -105,6 +274,17 @@ async function loadLog() {
   } catch (e) { status('오류: ' + e.message); }
 }
 
+async function loadStatus() {
+  const body = $('#changesBody');
+  try {
+    const {diff: d} = await api('/api/status');
+    const rs = rows(d);
+    if (!rs.length) { body.innerHTML = '<p class="dim" style="padding:10px 14px">올릴 변경 없음</p>'; sel.changes.clear(); paintSel('changes'); return; }
+    body.innerHTML = `<div class="sum">${countsText(d.counts)} · ${badges(d.by_class)}</div>` + diffTable(d, 'changes', false);
+    bindList('changes');
+  } catch (e) { body.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
 function rows(d) {
   const out = [];
   for (const x of d.modified) out.push(['M', x.new.rel, x.new.cls, `${x.old.size}→${x.new.size}B`]);
@@ -113,94 +293,153 @@ function rows(d) {
   for (const x of d.deleted) out.push(['D', x.rel, x.cls, `${x.size}B`]);
   return out;
 }
-function diffTable(d, clickable) {
+// listName 이 있으면 선택 가능한 목록(헤더 체크박스·선택 수). withClass: 클래스별 집계 표
+function diffTable(d, listName, withClass = true) {
   const rs = rows(d);
   if (!rs.length) return '<p class="dim">변경 없음</p>';
-  let h = '<table><tr><th></th><th>애셋</th><th>클래스</th><th></th></tr>';
+  let h = '<table><tr>' + (listName ? '<th class="cb"><input type="checkbox" class="selall" title="전체 선택/해제"></th>' : '') +
+    `<th></th><th>애셋${listName ? ' <span class="selcount"></span>' : ''}</th><th>클래스</th><th></th></tr>`;
   for (const [k, rel, cls, extra] of rs)
-    h += `<tr class="${clickable ? 'row' : ''}" data-rel="${esc(rel)}"><td class="k ${k}">${k}</td><td>${esc(rel)}</td><td>${esc(cls)}</td><td class="dim">${esc(extra)}</td></tr>`;
+    h += `<tr class="${listName ? 'row' : ''}" data-rel="${esc(rel)}">` + (listName ? `<td class="cb"><input type="checkbox" tabindex="-1" ${sel[listName].has(rel) ? 'checked' : ''}></td>` : '') +
+      `<td class="k ${k}">${k}</td><td>${esc(rel)}</td><td><span class="badge">${esc(cls)}</span></td><td class="dim">${esc(extra)}</td></tr>`;
   h += '</table>';
   const bc = Object.keys(d.by_class);
-  if (bc.length) {
+  if (withClass && bc.length) {
     h += '<table><tr><th>클래스</th><th>집계</th></tr>';
     for (const cls of bc) h += `<tr><td>${esc(cls)}</td><td>${countsText(d.by_class[cls])}</td></tr>`;
     h += '</table>';
   }
   return h;
 }
+// 행 체크박스는 표시용: 선택 상태를 따라간다
+const _paint = paintSel;
+paintSel = function (name) { _paint(name); listRows(name).forEach(tr => { const c = tr.querySelector('td.cb input'); if (c) c.checked = sel[name].has(tr.dataset.rel); }); };
 
 async function select(id) {
-  selected = id; selectedRel = null;
+  selected = id; selectedRel = null; sel.detail.clear();
   document.querySelectorAll('.snap').forEach(e => e.classList.toggle('sel', +e.dataset.id === id));
   const det = $('#detail');
   try {
     const {snapshot: s, diff: d} = await api('/api/snap/' + id);
     det.innerHTML = `<h2>#${s.id} ${esc(s.message || '(자동)')}</h2>
       <div class="dim">${esc(s.time)} · ${s.kind} · 직전 #${s.parent ?? '-'} 대비 ${countsText(d.counts)}</div>
-      ${diffTable(d, true)}
-      <div id="restore"><button id="preview" class="ghost">이 시점으로 되돌리기 미리보기</button><div id="restoreOut"></div></div>
+      <div class="hint">클릭 선택 · Shift 범위 · Ctrl 추가 · Ctrl+A 전체 · Esc 해제 · 우클릭 메뉴</div>
+      ${diffTable(d, 'detail')}
+      <div id="restore"><button id="preview" class="ghost">이 스냅샷 전체로 되돌리기…</button></div>
       <div id="history"></div>`;
-    det.querySelectorAll('tr.row').forEach(tr => tr.onclick = () => showHistory(tr.dataset.rel, tr));
-    $('#preview').onclick = () => previewRestore(id);
+    bindList('detail', tr => showHistory(tr.dataset.rel, tr));
+    $('#preview').onclick = () => restoreFlow(id, []);
   } catch (e) { det.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
 async function showHistory(rel, tr) {
   selectedRel = rel;
-  document.querySelectorAll('tr.row').forEach(e => e.classList.toggle('sel', e === tr));
+  document.querySelectorAll('#detail tr.row').forEach(e => e.classList.toggle('hist', e === tr));
   const h = $('#history');
   h.innerHTML = `<h2>${esc(rel)} 버전 히스토리</h2><p class="dim">불러오는 중…</p>`;
   try {
     const {versions} = await api('/api/asset?rel=' + encodeURIComponent(rel));
     if (!versions.length) { h.innerHTML += '<p class="dim">기록 없음</p>'; return; }
-    let html = `<h2>${esc(rel)} 버전 히스토리</h2><div class="versions">`;
+    let html = `<h2>${esc(rel)} 버전 히스토리</h2><div class="hint">카드 우클릭 → 이 버전으로 되돌리기</div><div class="versions">`;
     for (const v of versions) {
       const thumb = v.sha
         ? `<img loading="lazy" src="/api/thumb?sha=${v.sha}" alt="" onerror="this.outerHTML='<div class=nothumb>썸네일 없음</div>'">`
         : '<div class="nothumb">삭제됨</div>';
-      html += `<div class="ver ${v.changed ? 'changed' : ''}">${thumb}
+      html += `<div class="ver ${v.changed ? 'changed' : ''}" data-id="${v.id}">${thumb}
         <div><b>#${v.id}</b> ${esc(KIND[v.state] || '동일')}</div>
         <div class="dim">${esc(v.time)}</div>
         <div class="dim">${v.size != null ? v.size + 'B' : ''} ${v.sha ? v.sha.slice(0, 8) : ''}</div>
         <div>${esc(v.message)}</div></div>`;
     }
     h.innerHTML = html + '</div>';
+    h.querySelectorAll('.ver').forEach(card => card.oncontextmenu = e => {
+      e.preventDefault();
+      const vid = +card.dataset.id;
+      openMenu(e.clientX, e.clientY, [{label: `이 버전(#${vid})으로 되돌리기: ${rel}`, run: () => restoreFlow(vid, [rel])}]);
+    });
   } catch (e) { h.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
-async function previewRestore(id) {
-  const out = $('#restoreOut');
-  out.innerHTML = '<p class="dim">계산 중…</p>';
+// ---- 올리기 ----
+async function snapFlow(only) {
+  const message = await promptMessage(only.length ? `선택한 ${only.length}개만 올리기` : '전부 올리기',
+    only.length ? only.join(', ') : '현재 변경사항 전체를 label 스냅샷으로 만듭니다.');
+  if (!message) return;
+  status('스냅샷 만드는 중…');
   try {
-    const p = await api('/api/restore/' + id);
-    let html = `<p>현재 → #${id} 로 되돌리면: ${countsText(p.diff.counts)}</p>` + diffTable(p.diff, false);
-    if (p.dependents.length)
-      html += `<div class="warn">경고: 롤백으로 사라지는 애셋을 참조 (${p.dependents.length})<br>` +
-        p.dependents.map(x => `! ${esc(x.rel)} → ${esc(x.dep)}`).join('<br>') + '</div>';
-    if (p.broken.length)
-      html += `<div class="warn">경고: 깨질 참조 (${p.broken.length})<br>` +
-        p.broken.map(x => `! ${esc(x.rel)} → ${esc(x.dep)}`).join('<br>') + '</div>';
-    if (!p.dependents.length && !p.broken.length) html += '<p class="ok">참조 검산: 이상 없음</p>';
-    html += `<p class="dim">드라이런입니다. 적용은 CLI: <code>python -m jokate restore &lt;project&gt; ${id} --apply</code></p>`;
-    out.innerHTML = html;
-  } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+    const r = await api('/api/snap', {method: 'POST', headers: JSONH, body: JSON.stringify({message, only})});
+    $('#msg').value = '';
+    await loadLog(); await loadStatus();
+    if (r.snapshot) { toast(`#${r.snapshot.id} 올림 · ${countsText(r.diff.counts)}`); await select(r.snapshot.id); }
+    else toast('선택한 애셋에 변경이 없어 스냅샷을 만들지 않았습니다', true);
+    status(`스냅샷 ${headId != null ? '#' + headId + ' 까지' : '없음'}`);
+  } catch (e) { toast('오류: ' + e.message, true); status('오류: ' + e.message); }
 }
 
+// ---- 되돌리기: 드라이런 모달 → 확인 → 적용 ----
+function refList(title, xs) {
+  return `<div class="err"><b>경고: ${esc(title)} (${xs.length})</b><br>` + xs.map(x => `! ${esc(x.rel)} → ${esc(x.dep)}`).join('<br>') + '</div>';
+}
+async function restoreFlow(id, assets) {
+  const scope = assets.length ? `선택 ${assets.length}개` : '전체';
+  openModal(`<h3>#${id} 로 되돌리기 (${esc(scope)})</h3><p class="dim">계산 중…</p>`);
+  let p;
+  try {
+    const qs = assets.map(a => 'asset=' + encodeURIComponent(a)).join('&');
+    p = await api(`/api/restore/${id}` + (qs ? '?' + qs : ''));
+  } catch (e) {
+    openModal(`<h3>#${id} 로 되돌리기</h3><div class="err">${esc(e.message)}</div><div class="btns"><button class="ghost" onclick="closeModal()">닫기</button></div>`);
+    return;
+  }
+  const n = rows(p.diff).length;
+  let html = `<h3>#${id} ${esc(p.snapshot.message || '(자동)')} 로 되돌리기 (${esc(scope)})</h3>
+    <div class="dim">${esc(p.snapshot.time)} · 현재 → #${id}: ${countsText(p.diff.counts)}</div>` + diffTable(p.diff, null);
+  if (p.dependents.length) html += refList('롤백으로 사라지는 애셋을 참조', p.dependents);
+  if (p.broken.length) html += refList('깨질 참조', p.broken);
+  if (n && !p.dependents.length && !p.broken.length) html += '<p class="ok">참조 검산: 이상 없음</p>';
+  html += '<div class="note">되돌리기 직전 안전 스냅샷이 자동 생성됩니다. 롤백도 그 스냅샷으로 다시 되돌릴 수 있습니다.</div>';
+  html += `<div id="restoreErr"></div><div class="btns"><button id="rcancel" class="ghost">취소</button><button id="rok" class="danger" ${n ? '' : 'disabled'}>${n ? `되돌리기 (${n}개 변경)` : '변경 없음'}</button></div>`;
+  openModal(html);
+  $('#rcancel').onclick = closeModal;
+  $('#rok').onclick = () => applyRestore(id, assets, false);
+}
+async function applyRestore(id, assets, discard) {
+  const btn = $('#rok'), box = $('#restoreErr');
+  btn.disabled = true; btn.textContent = '적용 중…'; box.innerHTML = '';
+  try {
+    const r = await api('/api/restore/' + id, {method: 'POST', headers: JSONH, body: JSON.stringify({assets, discard_dirty: discard})});
+    closeModal();
+    toast(`롤백 완료 #${r.result.id} · 안전 스냅샷 #${r.safety.id} · 복사 ${r.written} · 삭제 ${r.deleted}`);
+    await loadLog(); await loadStatus(); await select(r.result.id);
+  } catch (e) {
+    const dirty = (e.status === 409 && e.body && Array.isArray(e.body.dirty)) ? e.body.dirty : [];
+    if (dirty.length) {
+      box.innerHTML = `<div class="err"><b>${esc(e.message)}</b><br>에디터에 저장하지 않은 변경 (${dirty.length}):<ul class="dirty">` +
+        dirty.map(x => `<li>${esc(x)}</li>`).join('') + `</ul><div class="btns"><button id="rdiscard" class="danger">저장 안 한 변경 버리고 진행</button></div></div>`;
+      $('#rdiscard').onclick = () => applyRestore(id, assets, true);
+    } else box.innerHTML = `<div class="err">${esc(e.message)}</div>`;
+    btn.disabled = false; btn.textContent = '되돌리기';
+  }
+}
+
+// ---- 헤더 ----
 $('#mksnap').onclick = async () => {
   const message = $('#msg').value.trim();
   if (!message) { status('메시지를 입력하세요'); $('#msg').focus(); return; }
   $('#mksnap').disabled = true; status('스냅샷 만드는 중…');
   try {
-    const r = await api('/api/snap', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message})});
+    const r = await api('/api/snap', {method: 'POST', headers: JSONH, body: JSON.stringify({message})});
     $('#msg').value = '';
-    await loadLog();
+    await loadLog(); await loadStatus();
     if (r.snapshot) { await select(r.snapshot.id); status(`#${r.snapshot.id} 생성 · ${countsText(r.diff.counts)} · 새 객체 ${r.stored}`); }
   } catch (e) { status('오류: ' + e.message); }
   finally { $('#mksnap').disabled = false; }
 };
 $('#msg').onkeydown = e => { if (e.key === 'Enter') $('#mksnap').click(); };
-$('#reload').onclick = loadLog;
-loadLog();
+$('#reload').onclick = () => { loadLog(); loadStatus(); };
+$('#reloadStatus').onclick = loadStatus;
+setInterval(loadStatus, 30000);
+loadLog(); loadStatus();
 </script>
 </body>
 </html>

@@ -39,9 +39,18 @@ python -m jokate serve   <project> [--port 8765]                      # 타임�
 - 표준 라이브러리 `http.server` 만 사용, 프레임워크 없음. 단일 HTML + vanilla JS, 다크 테마, 한국어
 - 왼쪽 타임라인(label 진하게 / auto 흐리게, `수정 3 · 추가 1` 건수 + 클래스 배지), 오른쪽 선택 스냅샷의 A/M/R/D 목록
 - 목록 항목을 클릭하면 하단에 그 애셋의 버전 히스토리 + 버전별 썸네일(패키지 헤더의 첫 썸네일)
-- 상단 메시지 입력 + '스냅샷 만들기'(label), 상세의 '이 시점으로 되돌리기 미리보기'(드라이런 + 참조 경고만, 적용은 CLI `restore --apply`)
+- 상단 메시지 입력 + '스냅샷 만들기'(label), 왼쪽 상단 '현재 변경사항' 패널(HEAD 대비 아직 올리지 않은 A/M/R/D, 30초 자동 갱신), 우클릭 메뉴로 부분 올리기·되돌리기 (아래 'UI 조작')
 - JSON API: `GET /api/log`, `GET /api/status`, `GET /api/snap/<id>`, `GET /api/asset?rel=`, `GET /api/thumb?sha=`, `GET /api/restore/<id>[?asset=]`, `POST /api/snap {message, only?:[rel]}`, `POST /api/restore/<id> {assets?:[rel], discard_dirty?:bool}`
-- `POST /api/restore/<id>` 는 plan_restore→apply_restore 실행. 성공 `{ok:true, safety, result, written, deleted}`; 에디터 dirty·브릿지 없음으로 중단되면 409 `{ok:false, error, dirty:[...]}` (`store.RestoreBlocked`), 그 외 500. (UI 연결은 다음 단계)
+- `POST /api/restore/<id>` 는 plan_restore→apply_restore 실행. 성공 `{ok:true, safety, result, written, deleted}`; 에디터 dirty·브릿지 없음으로 중단되면 409 `{ok:false, error, dirty:[...]}` (`store.RestoreBlocked`), 그 외 500.
+
+## UI 조작
+
+- 선택: 애셋 목록(현재 변경사항 패널, 스냅샷 상세)에서 클릭 토글 · Shift 범위 · Ctrl 추가 · 헤더 체크박스 전체 선택/해제 · Ctrl+A 전체 · Esc 해제. 선택 수는 헤더 옆에 표시
+- 현재 변경사항 패널 우클릭: '선택한 것만 올리기'(메시지 모달 → `POST /api/snap {only}`), '전부 올리기', '선택한 것 되돌리기 — 마지막 스냅샷 상태로'
+- 스냅샷 상세 우클릭: '선택한 애셋을 이 시점으로 되돌리기', '이 스냅샷 전체로 되돌리기'. 애셋 히스토리 카드 우클릭: '이 버전으로 되돌리기'
+- 되돌리기는 항상 드라이런 확인 모달을 먼저 띄운다: 변경 목록(M/A/R/D) + 클래스별 집계 + 참조 경고(빨강) + '되돌리기 직전 안전 스냅샷이 자동 생성됩니다'. 확인하면 `POST /api/restore/<id>` 적용 → '롤백 완료 #N · 안전 스냅샷 #M' 토스트, 타임라인·변경사항 갱신
+- 에디터에 저장 안 한 변경(dirty)으로 409 가 오면 모달에 dirty 목록과 '저장 안 한 변경 버리고 진행' 버튼(`discard_dirty:true` 재요청). 그 외 오류는 모달에 메시지
+- 컨텍스트 메뉴는 화면 밖으로 나가지 않으며 Esc·바깥 클릭·스크롤로 닫힌다
 
 ## 자동 스냅샷 (watch)
 
