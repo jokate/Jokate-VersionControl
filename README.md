@@ -95,6 +95,20 @@ python -m jokate daemon-stop <project>                                # 돌고 �
 - 웹 헤더의 상태 칩: `● 자동 스냅샷 켜짐` / `일시정지` 클릭 토글, 옆의 `종료` 버튼은 데몬을 끈다. `serve` 단독이면 회색 칩에 조작 불가(409)
 - API: `GET /api/daemon`, `POST /api/daemon {action: pause|resume|stop}`
 
+### 에디터를 켜면 자동 실행
+
+- `bridge-install` 이 `.jokate/tool.json` `{tool_dir, python, pythonw, autostart}` 를 쓰고 `jokate_launch.py` 도 `Content/Python/` 에 복사한다. 도구를 다른 폴더로 옮기거나 파이썬을 바꿨으면 `bridge-install` 을 다시 실행
+- 에디터가 뜨면 브릿지가 워커 스레드에서 `GET /api/daemon` 을 2초 타임아웃으로 확인 → 응답이 있으면 아무것도 안 하고(다만 `serve` 단독이면 '자동 스냅샷이 꺼져 있다' 경고), 연결 실패면 `pythonw -m jokate daemon <project>` 를 창 없이(DETACHED) 띄우고 Output Log 에 `[jokate] 데몬 자동 실행 pid=N`
+- 자식 프로세스 환경에서 `PYTHON*` 변수(UE 의 `PYTHONHOME`/`PYTHONPATH` 등)를 모두 지운다. 안 지우면 시스템 파이썬이 UE 파이썬 경로로 오염되어 바로 죽는다
+- 끄는 법: 환경변수 `JOKATE_NO_AUTOSTART=1`, 또는 `.jokate/config.toml` 의 `[editor] autostart = false` 후 `bridge-install` 재실행(값은 tool.json 에 기록된다)
+
+### 트레이 아이콘
+
+- 데몬이 시작할 때 `ctypes` 만으로 윈도우 트레이 아이콘(숨은 메시지 창 + `Shell_NotifyIconW`)을 자체 스레드에 띄운다. 툴팁 `Jokate - <프로젝트명>`
+- 우클릭 메뉴: `타임라인 열기` / `지금 스냅샷` / `자동 스냅샷 일시정지·재개`(상태에 따라 라벨 변경) / `종료`. 더블클릭 = 타임라인 열기
+- `지금 스냅샷` 은 `control.snap_now()` 로 플래그만 세우고 실제 스냅은 watch 루프 스레드가 찍는다(SQLite 스레드 고정)
+- 최선 노력: Windows 가 아니거나 실패하면 `.jokate/daemon.log` 에 한 줄 남기고 데몬은 계속 돈다. 끄려면 `[daemon] tray = false`
+
 ## 롤백 (restore)
 
 - 기본은 드라이런: 되돌릴 애셋(M 수정 되돌림 / A 부활 / R 이동 / D 삭제) 목록 + 클래스별 집계 + 참조 검산만 출력. 아무것도 바꾸지 않는다
@@ -142,7 +156,7 @@ python -m jokate daemon-stop <project>                                # 돌고 �
 - `jokate/watch.py` — 저장 감지 자동 스냅샷 데몬 (폴링 + debounce, `poll_once` 순수 함수)
 - `jokate/daemon.py` — 창 없는 단일 데몬 (웹 + watch 스레드, 상태 파일·로그, pause/resume/stop 컨트롤)
 - `jokate/web.py` + `jokate/web_static/index.html` — 타임라인 웹 UI (JSON API 는 `api_*` 순수 함수, 서버 없이 테스트)
-- `jokate/bridge.py` — 에디터 브릿지 도구 쪽 (`bridge_alive`, `request`, `install`) / `jokate/ue/jokate_bridge.py` — 에디터 쪽 (UE Python, `import unreal`, 콘텐츠 브라우저 메뉴) / `jokate/ue/jokate_client.py` — 웹 API 클라이언트 (urllib 만)
+- `jokate/bridge.py` — 에디터 브릿지 도구 쪽 (`bridge_alive`, `request`, `install`) / `jokate/ue/jokate_bridge.py` — 에디터 쪽 (UE Python, `import unreal`, 콘텐츠 브라우저 메뉴) / `jokate/ue/jokate_client.py` — 웹 API 클라이언트 (urllib 만) / `jokate/ue/jokate_launch.py` — 데몬 실행기 (tool.json, PYTHON* 청소, 창 없는 Popen) / `jokate/tray.py` — 윈도우 트레이 아이콘 (ctypes, `menu_items` 순수 함수)
 - `jokate/config.py` — 프로젝트 설정
 - `jokate/__main__.py` — CLI
 

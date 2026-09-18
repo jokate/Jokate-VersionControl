@@ -51,8 +51,10 @@ class ConnectionError(Exception):  # noqa: A001 - 서버 안 떠 있음
     pass
 
 
-def _call(base, path, body=None):
+def _call(base, path, body=None, timeout=None):
     """(status_code, json). HTTP 오류 상태도 본문이 json 이면 그대로 돌려준다."""
+    if timeout is None:
+        timeout = TIMEOUT
     url = base.rstrip("/") + path
     data = None
     headers = {}
@@ -61,7 +63,7 @@ def _call(base, path, body=None):
         headers["Content-Type"] = "application/json; charset=utf-8"
     req = urllib.request.Request(url, data=data, headers=headers, method="POST" if body is not None else "GET")
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.loads(r.read().decode("utf-8") or "null")
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace")
@@ -78,6 +80,11 @@ def head_id(base):
     if code != 200 or not log:
         return None
     return log[0].get("id")
+
+
+def daemon_status(base, timeout=2.0):
+    """GET /api/daemon → (code, json). 서버가 없으면 ConnectionError (에디터 자동 실행 판정용)."""
+    return _call(base, "/api/daemon", timeout=timeout)
 
 
 def status(base):

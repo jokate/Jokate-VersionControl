@@ -22,13 +22,21 @@ import traceback
 
 import unreal
 
-try:
-    import jokate_client as _client  # 같은 Content/Python 에 함께 설치됨
-except ImportError:  # 개발 중 저장소에서 바로 로드한 경우
-    import importlib.util as _ilu
-    _spec = _ilu.spec_from_file_location("jokate_client", os.path.join(os.path.dirname(os.path.abspath(__file__)), "jokate_client.py"))
-    _client = _ilu.module_from_spec(_spec)
-    _spec.loader.exec_module(_client)
+def _sibling(modname):
+    """같은 폴더의 모듈을 import (Content/Python 에 함께 설치되지만 저장소에서 바로 로드할 수도 있다)."""
+    try:
+        return __import__(modname)
+    except ImportError:
+        import importlib.util as _ilu
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), modname + ".py")
+        spec = _ilu.spec_from_file_location(modname, path)
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+
+_client = _sibling("jokate_client")
+_launch = _sibling("jokate_launch")
 
 POLL_INTERVAL = 1.0
 
@@ -271,6 +279,25 @@ def _tick(delta_seconds):
         unreal.log_warning("[jokate] bridge tick error:\n" + traceback.format_exc())
 
 
+def _autostart_check():
+    """데몬이 떠 있는지 2초 안에 확인하고, 없으면 창 없이 띄운다 (워커 스레드 전용 — 게임 스레드에서 부르지 말 것)."""
+    tool = _launch.read_tool(_project_dir)
+    if tool is None:
+        _report("warn", "[jokate] .jokate/tool.json 이 없어 데몬 자동 실행 생략 — bridge-install 을 다시 실행하세요")
+        return
+    if not _launch.autostart_enabled(tool):
+        return
+    base = _client.base_url(_project_dir)
+    try:
+        code, j = _client.daemon_status(base, 2.0)
+    except _client.ConnectionError:
+        pid = _launch.launch(_project_dir)
+        _report("log", "[jokate] 데몬 자동 실행 pid=%s" % pid)
+        return
+    if code == 200 and isinstance(j, dict) and not j.get("running"):
+        _report("warn", "[jokate] 포트를 serve 단독 서버가 쓰는 중 — 자동 스냅샷이 꺼져 있다")
+
+
 def start():
     global _tick_handle
     stop()
@@ -279,6 +306,7 @@ def start():
         _register_menu()
     except Exception:  # noqa: BLE001
         unreal.log_warning("[jokate] 메뉴 등록 실패:\n" + traceback.format_exc())
+    _run_bg(_autostart_check)
     unreal.log("[jokate] bridge started: %s" % BRIDGE_DIR)
 
 

@@ -13,16 +13,20 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import time
 import uuid
 from pathlib import Path
 
+from . import config as cfgmod
 from .config import Config
 
 HEARTBEAT_MAX_AGE = 3.0
 _SRC = Path(__file__).resolve().parent / "ue" / "jokate_bridge.py"
 _SRC_CLIENT = Path(__file__).resolve().parent / "ue" / "jokate_client.py"
+_SRC_LAUNCH = Path(__file__).resolve().parent / "ue" / "jokate_launch.py"
 INIT_LINE = "import jokate_bridge"
+TOOL_FILE = "tool.json"
 
 
 def bridge_dir(cfg: Config) -> Path:
@@ -91,12 +95,33 @@ def request(cfg: Config, op: str, packages: list[str], args: dict | None = None,
     raise TimeoutError(f"에디터 브릿지 응답 없음 ({op}, {timeout:.0f}s)")
 
 
+def tool_info(autostart: bool = True) -> dict:
+    """에디터가 데몬을 띄울 때 쓸 정보. 경로는 슬래시만."""
+    exe = Path(sys.executable).resolve()
+    pyw = exe.with_name("pythonw.exe")
+    return {
+        "tool_dir": Path(__file__).resolve().parent.parent.as_posix(),
+        "python": exe.as_posix(),
+        "pythonw": pyw.as_posix() if pyw.exists() else None,
+        "autostart": bool(autostart),
+    }
+
+
+def write_tool_json(project: Path, autostart: bool = True) -> Path:
+    """<project>/.jokate/tool.json 을 쓴다."""
+    d = Path(project).resolve() / cfgmod.STATE_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / TOOL_FILE
+    p.write_text(json.dumps(tool_info(autostart), ensure_ascii=False, indent=2), encoding="utf-8")
+    return p
+
+
 def install(project: Path) -> list[str]:
-    """jokate_bridge.py 를 <project>/Content/Python/ 에 복사하고 init_unreal.py 에 import 줄을 보장. 한 일 목록 반환."""
+    """에디터 스크립트를 <project>/Content/Python/ 에 복사하고, init_unreal.py 의 import 줄과 tool.json 을 보장."""
     done: list[str] = []
     pydir = Path(project).resolve() / "Content" / "Python"
     pydir.mkdir(parents=True, exist_ok=True)
-    for src in (_SRC, _SRC_CLIENT):
+    for src in (_SRC, _SRC_CLIENT, _SRC_LAUNCH):
         dst = pydir / src.name
         if not dst.exists() or dst.read_bytes() != src.read_bytes():
             shutil.copyfile(src, dst)
@@ -112,4 +137,6 @@ def install(project: Path) -> list[str]:
                 f.write(("" if init.stat().st_size == 0 or init.read_text(encoding="utf-8").endswith("\n") else os.linesep)
                         + INIT_LINE + "\n")
             done.append(f"appended '{INIT_LINE}' to {init}")
+    tool = write_tool_json(project, cfgmod.load(project).autostart)
+    done.append(f"wrote {tool}")
     return done

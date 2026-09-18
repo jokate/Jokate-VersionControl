@@ -33,6 +33,14 @@ ignore = ["Developers", "Collections"]
 [web]
 # serve 포트 (--port 미지정 시). 에디터 우클릭 메뉴도 이 값으로 접속
 port = 8765
+
+[daemon]
+# 데몬이 윈도우 트레이 아이콘을 띄울지
+tray = true
+
+[editor]
+# 에디터를 켤 때 데몬을 자동으로 띄울지 (bridge-install 시점에 tool.json 에 기록된다)
+autostart = true
 """
 DEFAULT_PORT = 8765
 
@@ -44,6 +52,8 @@ class Config:
     vendor: list[str] = field(default_factory=list)
     ignore: list[str] = field(default_factory=lambda: ["Developers", "Collections"])
     port: int = DEFAULT_PORT
+    tray: bool = True          # [daemon] tray — 데몬이 트레이 아이콘을 띄울지
+    autostart: bool = True     # [editor] autostart — 에디터가 데몬을 자동 실행할지
 
     @property
     def state_dir(self) -> Path:
@@ -75,6 +85,8 @@ def load(project: str | Path) -> Config:
         vendor=list(tiers.get("vendor", [])),
         ignore=list(tiers.get("ignore", ["Developers", "Collections"])),
         port=int(data.get("web", {}).get("port", DEFAULT_PORT)),
+        tray=bool(data.get("daemon", {}).get("tray", True)),
+        autostart=bool(data.get("editor", {}).get("autostart", True)),
     )
 
 

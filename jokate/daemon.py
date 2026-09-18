@@ -130,6 +130,7 @@ class DaemonControl:
         self.last_line = ""
         self._paused = threading.Event()
         self._stopping = threading.Event()
+        self._snap_req = threading.Event()   # 트레이 '지금 스냅샷' → watch 루프가 집어간다
 
     @property
     def paused(self) -> bool:
@@ -161,6 +162,19 @@ class DaemonControl:
             self.log(f"{format_ts(time.time())}  종료 요청")
         return self.status()
 
+    def snap_now(self) -> dict:
+        """수동 스냅샷 요청. 실제 스냅은 watch 루프 스레드가 찍는다(sqlite 스레드 고정)."""
+        self._snap_req.set()
+        self.log(f"{format_ts(time.time())}  수동 스냅샷 요청")
+        return self.status()
+
+    def take_snap_request(self) -> bool:
+        """요청이 있었으면 True 를 돌려주며 플래그를 내린다."""
+        if self._snap_req.is_set():
+            self._snap_req.clear()
+            return True
+        return False
+
     def wait_stop(self, timeout: float | None = None) -> bool:
         return self._stopping.wait(timeout)
 
@@ -180,6 +194,13 @@ def watch_loop(cfg: Config, control: DaemonControl, interval: float = 2.0, debou
         while not control.stopping:
             if control.wait_stop(interval):
                 break
+            if control.take_snap_request():      # 일시정지 중이어도 수동 요청은 찍는다
+                try:
+                    snap, d, _ = st.snap("트레이에서 수동 스냅샷")
+                    control.log(watchmod.format_line(watchmod.PollResult(snap, d)))
+                    state = watchmod.WatchState(watchmod.fingerprint(cfg), None)
+                except Exception as e:  # noqa: BLE001
+                    control.log(f"{format_ts(time.time())}  수동 스냅샷 실패: {type(e).__name__}: {e}")
             if control.paused:
                 continue
             try:
@@ -212,6 +233,10 @@ def run(cfg: Config, port: int | None = None, interval: float = 2.0, debounce: f
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     t_watch = threading.Thread(target=watch_loop, args=(cfg, control, interval, debounce), daemon=True)
     t_watch.start()
+    if getattr(cfg, "tray", True):
+        from . import tray as traymod
+        traymod.start(control, title=f"Jokate - {cfg.root.name}",
+                      url=f"http://127.0.0.1:{control.port}/", log=control.log)
     try:
         while not control.wait_stop(0.5):
             pass
