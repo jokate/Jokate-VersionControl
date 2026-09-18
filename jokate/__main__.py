@@ -8,7 +8,9 @@ jokate CLI
   python -m jokate snap <project> [-m 메시지]      # authored 스냅샷 (-m 없으면 auto)
   python -m jokate log <project>
   python -m jokate show <project> <id>             # 직전 스냅샷 대비 변경
-  python -m jokate restore <project> <id> [--asset rel ...] [--apply]   # 롤백 (기본 드라이런)
+  python -m jokate restore <project> <id> [--asset rel ...] [--apply] [--discard-dirty]   # 롤백 (기본 드라이런)
+  python -m jokate bridge-install <project>        # 에디터 브릿지 스크립트를 Content/Python 에 설치
+  python -m jokate bridge-status <project>         # 브릿지 heartbeat 나이
   python -m jokate watch <project> [--interval 2] [--debounce 5]        # 저장 감지 자동 스냅샷
   python -m jokate serve <project> [--port 8765]                        # 타임라인 웹 UI
 """
@@ -133,18 +135,38 @@ def cmd_restore(a: argparse.Namespace) -> int:
     if not a.apply:
         print("(드라이런 — 적용하려면 --apply)")
         return 0
-    if storemod.editor_running():
-        print("UnrealEditor.exe 가 실행 중이다 — 에디터를 닫고 다시 실행", file=sys.stderr)
-        return 2
     t0 = time.time()
     try:
-        r = st.apply_restore(plan, check_editor=False)
+        r = st.apply_restore(plan, discard_dirty=a.discard_dirty)
     except (RuntimeError, FileNotFoundError) as e:
         print(e, file=sys.stderr)
         return 2
-    print(f"안전 스냅샷 #{r.safety.id} ({r.safety.message}) → 파일 {r.written}개 씀, {r.deleted}개 삭제"
+    reload = f", 에디터 reload {r.reloaded}개" if r.reloaded is not None else ""
+    print(f"안전 스냅샷 #{r.safety.id} ({r.safety.message}) → 파일 {r.written}개 씀, {r.deleted}개 삭제{reload}"
           f" → 스냅샷 #{r.result.id} ({r.result.message})  ({time.time() - t0:.1f}s)")
     return 0
+
+
+def cmd_bridge_install(a: argparse.Namespace) -> int:
+    from . import bridge
+    done = bridge.install(Path(a.project))
+    print("\n".join(done) if done else "이미 설치됨")
+    print("에디터를 (재)시작하거나 Python 콘솔에서 `import jokate_bridge` 실행")
+    return 0
+
+
+def cmd_bridge_status(a: argparse.Namespace) -> int:
+    from . import bridge
+    from . import store as storemod
+    cfg = cfgmod.load(a.project)
+    age = bridge.heartbeat_age(cfg)
+    editor = "실행 중" if storemod.editor_running() else "꺼짐"
+    if age is None:
+        print(f"브릿지 없음 (heartbeat 없음)  에디터: {editor}")
+        return 1
+    alive = age <= bridge.HEARTBEAT_MAX_AGE
+    print(f"heartbeat {age:.1f}s 전 → {'살아 있음' if alive else '끊김'}  에디터: {editor}")
+    return 0 if alive else 1
 
 
 def cmd_watch(a: argparse.Namespace) -> int:
@@ -176,7 +198,10 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("restore"); s.add_argument("project"); s.add_argument("id", type=int)
     s.add_argument("--asset", action="append", metavar="REL", help="이 애셋만 되돌림 (Content 기준 상대경로, 반복 가능)")
     s.add_argument("--apply", action="store_true", help="실제 적용 (기본은 드라이런)")
+    s.add_argument("--discard-dirty", action="store_true", help="에디터에 저장 안 된 대상 패키지가 있어도 덮어씀")
     s.set_defaults(fn=cmd_restore)
+    s = sub.add_parser("bridge-install"); s.add_argument("project"); s.set_defaults(fn=cmd_bridge_install)
+    s = sub.add_parser("bridge-status"); s.add_argument("project"); s.set_defaults(fn=cmd_bridge_status)
     s = sub.add_parser("watch"); s.add_argument("project")
     s.add_argument("--interval", type=float, default=2.0, help="폴링 주기(초)")
     s.add_argument("--debounce", type=float, default=5.0, help="마지막 변화 후 이만큼 조용하면 스냅샷(초)")

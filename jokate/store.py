@@ -233,21 +233,44 @@ class Store:
                 elif not resolvable(dep):
                     plan.broken.append((rel, dep))
 
-    def apply_restore(self, plan: "RestorePlan", *, check_editor: bool = True) -> "RestoreResult":
-        """계획 적용: 안전 스냅샷 → 파일 복사/삭제 → 결과 스냅샷."""
+    def apply_restore(self, plan: "RestorePlan", *, check_editor: bool = True,
+                      discard_dirty: bool = False) -> "RestoreResult":
+        """계획 적용: 안전 스냅샷 → 파일 복사/삭제 → 결과 스냅샷.
+
+        에디터 실행 중이면 브릿지(jokate.bridge)가 살아 있어야 하고, 대상 패키지가 dirty 면 중단
+        (discard_dirty=True 면 통과). 파일 적용 후 에디터에 reload 요청.
+        """
+        use_bridge = False
         if check_editor and editor_running():
-            raise RuntimeError("UnrealEditor.exe 가 실행 중이다 — 에디터를 닫고 다시 실행")
+            from . import bridge
+            if not bridge.bridge_alive(self.cfg):
+                raise RuntimeError("에디터가 켜져 있는데 브릿지가 없다 — 에디터 Python 콘솔에서 "
+                                   "import jokate_bridge 실행 또는 에디터 종료")
+            use_bridge = True
         sid = plan.snapshot.id
         # 객체가 모두 있는지 먼저 확인
         for e in plan.result.values():
             if not self.object_path(e.sha).exists():
                 raise FileNotFoundError(f"객체 없음: {e.rel} ({e.sha[:12]})")
+        to_write = [rel for rel, e in plan.result.items()
+                    if plan.current.get(rel) is None or plan.current[rel].sha != e.sha]
+        to_delete = [rel for rel in plan.current if rel not in plan.result]
+        pkgs = sorted({_pkg_of(rel) for rel in to_write + to_delete})
+        if use_bridge and pkgs:
+            try:
+                r = bridge.request(self.cfg, "dirty", pkgs)
+            except TimeoutError as e:
+                raise RuntimeError(str(e)) from e
+            if not r.get("ok"):
+                raise RuntimeError(f"에디터 dirty 확인 실패: {r.get('error')}")
+            dirty = list(r.get("dirty") or [])
+            if dirty and not discard_dirty:
+                raise RuntimeError("에디터에 저장 안 된 패키지가 있다 (저장하거나 --discard-dirty):\n  "
+                                   + "\n  ".join(dirty))
         safety, _, _ = self.snap(f"롤백 직전 #{sid}", kind="auto", force=True)
         written = 0
-        for rel, e in plan.result.items():
-            cur = plan.current.get(rel)
-            if cur is not None and cur.sha == e.sha:
-                continue
+        for rel in to_write:
+            e = plan.result[rel]
             dst = self.cfg.content / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             tmp = dst.with_name(dst.name + ".jokate-tmp")
@@ -255,14 +278,23 @@ class Store:
             tmp.replace(dst)
             written += 1
         deleted = 0
-        for rel in plan.current:
-            if rel not in plan.result:
-                p = self.cfg.content / rel
-                if p.exists():
-                    p.unlink()
-                    deleted += 1
+        for rel in to_delete:
+            p = self.cfg.content / rel
+            if p.exists():
+                p.unlink()
+                deleted += 1
+        reloaded: int | None = None
+        if use_bridge and pkgs:
+            try:
+                r = bridge.request(self.cfg, "reload", pkgs, {"discard_dirty": discard_dirty})
+            except TimeoutError as e:
+                raise RuntimeError(f"파일은 적용됐지만 {e} — 에디터를 재시작하라") from e
+            if not r.get("ok"):
+                raise RuntimeError(f"파일은 적용됐지만 에디터 reload 실패: {r.get('error')} "
+                                   f"dirty={r.get('dirty') or []} — 에디터를 재시작하라")
+            reloaded = int(r.get("reloaded") or 0)
         result, _, _ = self.snap(f"롤백: #{sid}", kind="label", force=True)
-        return RestoreResult(safety=safety, result=result, written=written, deleted=deleted)
+        return RestoreResult(safety=safety, result=result, written=written, deleted=deleted, reloaded=reloaded)
 
     def close(self) -> None:
         self.db.close()
@@ -284,6 +316,7 @@ class RestoreResult:
     result: Snapshot
     written: int
     deleted: int
+    reloaded: int | None = None   # 브릿지로 에디터에 reload 한 패키지 수 (에디터 안 켜져 있으면 None)
 
 
 def _pkg_of(rel: str) -> str:

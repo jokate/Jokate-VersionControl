@@ -26,7 +26,9 @@ python -m jokate inspect <file.uasset> [--thumb out.jpg]
 python -m jokate snap    <project> [-m "메시지"]  # authored 스냅샷. -m 있으면 label, 없으면 auto. 변경 없으면 생략(--force)
 python -m jokate log     <project>               # 스냅샷 목록
 python -m jokate show    <project> <id>          # 직전 스냅샷 대비 추가(A)/수정(M)/이동(R)/삭제(D) + 클래스별 집계
-python -m jokate restore <project> <id> [--asset rel ...] [--apply]   # 롤백. 기본 드라이런, --apply 로 적용
+python -m jokate restore <project> <id> [--asset rel ...] [--apply] [--discard-dirty]   # 롤백. 기본 드라이런, --apply 로 적용
+python -m jokate bridge-install <project>        # 에디터 브릿지 스크립트를 Content/Python 에 설치
+python -m jokate bridge-status  <project>        # 브릿지 heartbeat 나이
 python -m jokate watch   <project> [--interval 2] [--debounce 5]      # 저장 감지 자동 스냅샷 데몬 (Ctrl+C 종료)
 python -m jokate serve   <project> [--port 8765]                      # 타임라인 웹 UI (http://127.0.0.1:8765/)
 ```
@@ -52,8 +54,23 @@ python -m jokate serve   <project> [--port 8765]                      # 타임�
 - `--asset rel` 을 주면 그 애셋들만 스냅샷 시점으로, 나머지는 현재 상태 유지 (반복 가능)
 - 참조 검산: 결과 트리 각 애셋의 `/Game/` 의존성이 결과 트리·vendor·현재 디스크 어디에도 없으면 "깨질 참조", 롤백으로 사라지는 애셋을 참조하는 authored 애셋은 별도 경고
 - `--apply` 순서: ① auto 스냅샷 `롤백 직전 #<id>` (안전망, 변경 없어도 생성) ② 객체를 `Content/` 로 복사(tmp→replace) ③ 결과 트리에 없는 authored 파일 삭제 ④ label 스냅샷 `롤백: #<id>`
-- `UnrealEditor.exe` 가 실행 중이면 `--apply` 를 거부한다 (에디터를 닫고 다시 실행)
+- `UnrealEditor.exe` 가 실행 중이면 에디터 브릿지가 필요하다 (아래). 브릿지가 없으면 `--apply` 거부
 - 롤백도 되돌릴 수 있다: `restore <project> <안전 스냅샷 id> --apply`
+
+## 에디터 브릿지 (bridge-install / bridge-status)
+
+에디터가 켜진 상태에서도 롤백을 적용하기 위한 파일 기반 프로토콜. 외부 의존성 없음, `<project>/.jokate/bridge/`:
+
+| 파일 | 쓰는 쪽 | 내용 |
+|---|---|---|
+| `heartbeat.json` | 에디터 | 1초마다 `{"ts"}` 갱신. 3초 넘게 오래되면 브릿지 없음으로 본다 |
+| `request.json` | 도구 | `{"id","op","packages":["/Game/..."],"args"}` |
+| `response-<id>.json` | 에디터 | `{"id","ok",...}` |
+
+- `bridge-install <project>`: `jokate/ue/jokate_bridge.py` 를 `<project>/Content/Python/jokate_bridge.py` 로 복사하고 `init_unreal.py` 에 `import jokate_bridge` 한 줄을 보장 (없으면 생성, 있으면 그 줄이 없을 때만 추가). `.py` 는 애셋이 아니라 스캐너가 무시한다
+- 에디터 쪽: `unreal.register_slate_post_tick_callback` 으로 1초마다 폴링. `dirty` → 요청 패키지 중 저장 안 된 것 목록. `reload` → dirty 대상이 있으면 `ok=false`(`args.discard_dirty` 면 통과), 존재하는 패키지는 `load_package` 후 `reload_packages(ASSUME_POSITIVE)`, 대상 폴더를 `scan_paths_synchronous(force_rescan)` 로 추가/삭제 반영. 예외는 `ok=false, error`
+- `restore --apply` 는 에디터 실행 중이면: 브릿지 없음 → 거부 / `dirty` 요청 → 저장 안 된 대상이 있으면 목록 출력하고 중단(`--discard-dirty` 로 통과) / 파일 쓰기·삭제 후 `reload` 요청 → 실패면 에디터 재시작 안내. 에디터가 꺼져 있으면 파일만 바꾼다
+- `bridge-status <project>`: heartbeat 나이와 생존 여부
 
 ## 스냅샷 저장소
 
@@ -69,6 +86,7 @@ python -m jokate serve   <project> [--port 8765]                      # 타임�
 - `jokate/store.py` — 스냅샷 저장소 (내용주소 객체 + SQLite 인덱스, 트리 diff)
 - `jokate/watch.py` — 저장 감지 자동 스냅샷 데몬 (폴링 + debounce, `poll_once` 순수 함수)
 - `jokate/web.py` + `jokate/web_static/index.html` — 타임라인 웹 UI (JSON API 는 `api_*` 순수 함수, 서버 없이 테스트)
+- `jokate/bridge.py` — 에디터 브릿지 도구 쪽 (`bridge_alive`, `request`, `install`) / `jokate/ue/jokate_bridge.py` — 에디터 쪽 (UE Python, `import unreal`)
 - `jokate/config.py` — 프로젝트 설정
 - `jokate/__main__.py` — CLI
 
