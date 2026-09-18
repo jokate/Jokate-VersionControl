@@ -41,6 +41,12 @@ tray = true
 [editor]
 # 에디터를 켤 때 데몬을 자동으로 띄울지 (bridge-install 시점에 tool.json 에 기록된다)
 autostart = true
+
+[retention]
+# 이보다 오래된 자동 스냅샷은 정리 대상 (0 이면 정리 안 함). 라벨 스냅샷은 절대 안 지운다
+auto_days = 14
+# 오래됐어도 최신 자동 스냅샷 이만큼은 남긴다 (0 이면 나이 기준만 적용)
+keep_last_auto = 30
 """
 DEFAULT_PORT = 8765
 
@@ -54,6 +60,8 @@ class Config:
     port: int = DEFAULT_PORT
     tray: bool = True          # [daemon] tray — 데몬이 트레이 아이콘을 띄울지
     autostart: bool = True     # [editor] autostart — 에디터가 데몬을 자동 실행할지
+    auto_days: int = 14        # [retention] auto_days — 자동 스냅샷 보관기간(일, 0=정리 안 함)
+    keep_last_auto: int = 30   # [retention] keep_last_auto — 최신 자동 스냅샷 보존 개수
 
     @property
     def state_dir(self) -> Path:
@@ -87,6 +95,8 @@ def load(project: str | Path) -> Config:
         port=int(data.get("web", {}).get("port", DEFAULT_PORT)),
         tray=bool(data.get("daemon", {}).get("tray", True)),
         autostart=bool(data.get("editor", {}).get("autostart", True)),
+        auto_days=int(data.get("retention", {}).get("auto_days", 14)),
+        keep_last_auto=int(data.get("retention", {}).get("keep_last_auto", 30)),
     )
 
 

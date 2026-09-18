@@ -28,6 +28,9 @@ python -m jokate status  <project>                # HEAD 대비 아직 올리지
 python -m jokate log     <project>               # 스냅샷 목록
 python -m jokate show    <project> <id>          # 직전 스냅샷 대비 추가(A)/수정(M)/이동(R)/삭제(D) + 클래스별 집계
 python -m jokate restore <project> <id> [--asset rel ...] [--apply] [--discard-dirty]   # 롤백. 기본 드라이런, --apply 로 적용
+python -m jokate squash  <project> <from_id> <to_id> [-m 메시지]      # from..to 사슬을 마지막 하나로 묶고 라벨
+python -m jokate prune   <project> [--days N] [--keep N] [--dry-run] # 오래된 auto 스냅샷 정리 (라벨은 안 지움)
+python -m jokate gc      <project> [--dry-run]                       # 어떤 스냅샷도 안 쓰는 객체 파일 삭제
 python -m jokate bridge-install <project>        # 에디터 브릿지 스크립트를 Content/Python 에 설치
 python -m jokate bridge-status  <project>        # 브릿지 heartbeat 나이
 python -m jokate watch   <project> [--interval 2] [--debounce 5]      # 저장 감지 자동 스냅샷 데몬 (Ctrl+C 종료)
@@ -91,6 +94,17 @@ python -m jokate daemon-stop <project>                                # 돌고 �
 - 변화 감지 후 `--debounce` 초 동안 추가 변화가 없으면 auto 스냅샷 (에디터의 연속 저장을 한 스냅샷으로 묶음)
 - 실제 변경 판단은 sha 비교. 리세이브로 mtime 만 바뀌면 `(내용 동일, 건너뜀)`
 - 시작 시 즉시 스냅샷 한 번. 스냅샷마다 한 줄(시간, #id, 클래스별 A/M/R/D 집계)을 stdout 과 `.jokate/watch.log` 에 기록
+
+## 정리 (squash · prune · gc)
+
+- 스냅샷은 전부 '전체 트리'라서 중간 스냅샷을 지워도 남은 스냅샷은 온전하다. 지운 스냅샷을 부모로 가진 스냅샷은 살아남은 조상으로 다시 이어지고 `noise` 는 새 부모 기준으로 재계산된다. HEAD 는 절대 안 지운다
+- `squash(ids, message)`: 부모-자식으로 연속된 사슬만 허용(아니면 `ValueError`). 마지막 하나만 `kind=label` + 메시지로 남기고 나머지 삭제
+- `prune(auto_days, keep_last_auto, now, dry_run)`: `kind=auto` 이고 `auto_days` 보다 오래됐고 최신 auto `keep_last_auto` 개에 안 들고 HEAD 가 아닌 것만 삭제. label 과 '롤백 직전' 라벨 스냅샷은 보존('롤백 직전' 안전 스냅샷은 auto 라 같은 규칙으로 정리된다)
+- `gc(dry_run)`: 어떤 tree 행도 참조하지 않는 객체 파일 삭제 + 빈 폴더·`.tmp` 잔여물 정리 → `(개수, 바이트)`. squash·prune 뒤에는 자동 실행. 모든 삭제는 한 트랜잭션
+- 설정 `[retention] auto_days = 14`, `keep_last_auto = 30` (0 이면 정리 안 함)
+- 데몬은 시작 시 한 번, 이후 24시간마다 prune+gc 를 돌리고 지운 게 있을 때만 `정리: 스냅샷 n개, 객체 m개 x MB` 를 `daemon.log` 에 남긴다
+- 웹: `POST /api/squash {ids, message}`, `POST /api/prune {dry_run}` → `{ids, objects, bytes}` (사슬 아님 등 `ValueError` 는 400)
+- UI: 타임라인에서 Ctrl+클릭 토글 · Shift+클릭 범위 선택(accent 테두리), 우클릭 → '선택한 n개를 하나로 묶고 이름 붙이기'(연속 사슬일 때만 활성) / '이 스냅샷으로 되돌리기'. 통계 바 '저장소' 옆 '정리' 버튼은 먼저 dry_run 으로 확인 모달을 띄우고 지울 게 없으면 '정리할 것이 없습니다'
 
 ## 데몬 (daemon)
 

@@ -184,6 +184,37 @@ class DaemonControl:
                 "last_line": self.last_line}
 
 
+# ---- 정리(보관기간·GC) ----
+RETENTION_INTERVAL = 24 * 3600      # 시작 시 한 번, 이후 24시간마다
+
+
+def retention_once(cfg: Config, control: "DaemonControl") -> tuple[int, int, int]:
+    """오래된 auto 스냅샷 정리 + 객체 GC. 지운 게 있으면 한 줄 로그. 반환 (스냅샷, 객체, 바이트)."""
+    st = Store(cfg)
+    try:
+        ids = st.prune(auto_days=getattr(cfg, "auto_days", 14),
+                       keep_last_auto=getattr(cfg, "keep_last_auto", 30), dry_run=True)
+        if ids:
+            st.delete_snapshots(ids)
+        objects, size = st.gc()
+    finally:
+        st.close()
+    if ids or objects:
+        control.log(f"{format_ts(time.time())}  정리: 스냅샷 {len(ids)}개, "
+                    f"객체 {objects}개 {size / 1048576:.1f} MB")
+    return len(ids), objects, size
+
+
+def retention_loop(cfg: Config, control: "DaemonControl", interval: float = RETENTION_INTERVAL) -> None:
+    while not control.stopping:
+        try:
+            retention_once(cfg, control)
+        except Exception as e:  # noqa: BLE001
+            control.log(f"{format_ts(time.time())}  정리 오류: {type(e).__name__}: {e}")
+        if control.wait_stop(interval):
+            break
+
+
 # ---- 루프 ----
 def watch_loop(cfg: Config, control: DaemonControl, interval: float = 2.0, debounce: float = 5.0) -> None:
     st = Store(cfg)
@@ -233,6 +264,8 @@ def run(cfg: Config, port: int | None = None, interval: float = 2.0, debounce: f
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     t_watch = threading.Thread(target=watch_loop, args=(cfg, control, interval, debounce), daemon=True)
     t_watch.start()
+    t_ret = threading.Thread(target=retention_loop, args=(cfg, control), daemon=True)
+    t_ret.start()
     if getattr(cfg, "tray", True):
         from . import tray as traymod
         traymod.start(control, title=f"Jokate - {cfg.root.name}",

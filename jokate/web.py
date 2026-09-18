@@ -16,6 +16,8 @@ JSON API
   POST /api/daemon {action}          pause|resume|stop (데몬 모드가 아니면 409)
   POST /api/snap  {message, only?:[rel]}   label 스냅샷 (only 있으면 부분 스냅샷)
   POST /api/restore/<id> {assets?:[rel], discard_dirty?:bool}  롤백 적용. 중단(dirty·브릿지) → 409 {ok:false,error,dirty}
+  POST /api/squash {ids:[id], message}     연속 스냅샷 묶기 (사슬 아니면 400)
+  POST /api/prune  {dry_run:bool}          오래된 auto 스냅샷 정리 + GC → {ids, objects, bytes}
   GET  /                             web_static/index.html
 
 핸들러 로직은 api_* 순수 함수로 분리해 서버 없이 테스트한다.
@@ -192,6 +194,29 @@ def api_restore_apply(store: Store, sid: int, assets: list[str] | None = None,
     r = store.apply_restore(plan, discard_dirty=discard_dirty)
     return {"ok": True, "safety": _snapshot(r.safety), "result": _snapshot(r.result),
             "written": r.written, "deleted": r.deleted, "reloaded": r.reloaded}
+
+
+def api_squash(store: Store, ids: list[int], message: str) -> dict:
+    """연속된 스냅샷들을 하나로 묶고 라벨을 붙인다. 사슬이 아니면 ValueError(→400)."""
+    try:
+        want = [int(x) for x in (ids or [])]
+    except (TypeError, ValueError) as e:
+        raise ValueError("ids 는 스냅샷 id 목록") from e
+    snap, removed = store.squash(want, str(message or "").strip())
+    return {"snapshot": _snapshot(snap), "removed": removed}
+
+
+def api_prune(store: Store, dry_run: bool = True) -> dict:
+    """오래된 auto 스냅샷 정리(+객체 GC). dry_run 이면 지울 것만 계산. → {ids, objects, bytes}"""
+    cfg = store.cfg
+    ids = store.prune(auto_days=cfg.auto_days, keep_last_auto=cfg.keep_last_auto, dry_run=True)
+    if dry_run:
+        objects, size = store.gc(dry_run=True, exclude_snapshots=ids)
+        return {"ids": ids, "objects": objects, "bytes": size}
+    if ids:
+        store.delete_snapshots(ids)
+    objects, size = store.gc()
+    return {"ids": ids, "objects": objects, "bytes": size}
 
 
 class DaemonUnavailable(Exception):
@@ -378,6 +403,15 @@ def make_handler(cfg: Config, control=None):
                     if not isinstance(only, list):
                         raise ValueError("only 는 rel 목록")
                     self._json(self._run(lambda st: api_snap_create(st, message, only)))
+                elif u.path == "/api/squash":
+                    ids = body.get("ids") or []
+                    if not isinstance(ids, list):
+                        raise ValueError("ids 는 스냅샷 id 목록")
+                    msg = str(body.get("message", "")).strip()
+                    self._json(self._run(lambda st: api_squash(st, ids, msg)))
+                elif u.path == "/api/prune":
+                    dry = bool(body.get("dry_run", True))
+                    self._json(self._run(lambda st: api_prune(st, dry)))
                 elif u.path.startswith("/api/restore/"):
                     sid = int(u.path.rsplit("/", 1)[1])
                     assets = body.get("assets") or []

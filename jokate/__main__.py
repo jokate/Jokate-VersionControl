@@ -9,7 +9,10 @@ jokate CLI
   python -m jokate log <project>
   python -m jokate show <project> <id>             # 직전 스냅샷 대비 변경
   python -m jokate restore <project> <id> [--asset rel ...] [--apply] [--discard-dirty]   # 롤백 (기본 드라이런)
-  python -m jokate bridge-install <project>        # 에디터 브릿지 스크립트를 Content/Python 에 설치
+  python -m jokate squash <project> <from_id> <to_id> [-m 메시지]   # 연속 스냅샷 묶기
+  python -m jokate prune <project> [--days N] [--keep N] [--dry-run]  # 오래된 auto 스냅샷 정리
+  python -m jokate gc <project> [--dry-run]         # 참조 없는 객체 삭제
+  python -m jokate bridge-install <project>      # 에디터 브릿지 스크립트를 Content/Python 에 설치
   python -m jokate bridge-status <project>         # 브릿지 heartbeat 나이
   python -m jokate watch <project> [--interval 2] [--debounce 5]        # 저장 감지 자동 스냅샷
   python -m jokate serve <project> [--port 8765]                        # 타임라인 웹 UI
@@ -167,6 +170,64 @@ def cmd_restore(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_squash(a: argparse.Namespace) -> int:
+    from . import store as storemod
+    cfg = cfgmod.load(a.project)
+    st = storemod.Store(cfg)
+    lo, hi = min(a.from_id, a.to_id), max(a.from_id, a.to_id)
+    chain: list[int] = []
+    sid: int | None = hi
+    while sid is not None and sid >= lo:
+        s = st.get(sid)
+        if s is None:
+            print(f"snapshot {sid} 없음", file=sys.stderr)
+            return 1
+        chain.append(sid)
+        if sid == lo:
+            break
+        sid = s.parent
+    chain.reverse()
+    if not chain or chain[0] != lo:
+        print(f"#{lo} 에서 #{hi} 로 이어지는 사슬이 없다", file=sys.stderr)
+        return 1
+    try:
+        snap, removed = st.squash(chain, a.message or "")
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return 1
+    print(f"snapshot #{snap.id} ({snap.kind}) {snap.message}".rstrip())
+    print(f"묶음: {len(chain)}개 → 1개, 스냅샷 {removed}개 삭제")
+    return 0
+
+
+def cmd_prune(a: argparse.Namespace) -> int:
+    from . import store as storemod
+    cfg = cfgmod.load(a.project)
+    st = storemod.Store(cfg)
+    days = a.days if a.days is not None else cfg.auto_days
+    keep = a.keep if a.keep is not None else cfg.keep_last_auto
+    ids = st.prune(auto_days=days, keep_last_auto=keep, dry_run=a.dry_run)
+    if not ids:
+        print("정리할 자동 스냅샷 없음")
+        return 0
+    head = "지울 대상" if a.dry_run else "삭제"
+    print(f"{head}: 자동 스냅샷 {len(ids)}개  " + ", ".join(f"#{i}" for i in ids[:20])
+          + (" …" if len(ids) > 20 else ""))
+    if a.dry_run:
+        n, size = st.gc(dry_run=True, exclude_snapshots=ids)
+        print(f"(드라이런 — 객체 {n}개 {size / 1048576:.1f} MB 가 함께 지워진다)")
+    return 0
+
+
+def cmd_gc(a: argparse.Namespace) -> int:
+    from . import store as storemod
+    st = storemod.Store(cfgmod.load(a.project))
+    n, size = st.gc(dry_run=a.dry_run)
+    head = "지울 객체" if a.dry_run else "지운 객체"
+    print(f"{head} {n}개  {size / 1048576:.1f} MB")
+    return 0
+
+
 def cmd_bridge_install(a: argparse.Namespace) -> int:
     from . import bridge
     done = bridge.install(Path(a.project))
@@ -234,6 +295,18 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--apply", action="store_true", help="실제 적용 (기본은 드라이런)")
     s.add_argument("--discard-dirty", action="store_true", help="에디터에 저장 안 된 대상 패키지가 있어도 덮어씀")
     s.set_defaults(fn=cmd_restore)
+    s = sub.add_parser("squash", help="연속된 스냅샷을 하나로 묶고 이름 붙이기")
+    s.add_argument("project"); s.add_argument("from_id", type=int); s.add_argument("to_id", type=int)
+    s.add_argument("-m", "--message", help="묶은 스냅샷 이름")
+    s.set_defaults(fn=cmd_squash)
+    s = sub.add_parser("prune", help="오래된 자동 스냅샷 정리 (라벨은 안 지움)")
+    s.add_argument("project")
+    s.add_argument("--days", type=int, default=None, help="기본: config.toml [retention] auto_days")
+    s.add_argument("--keep", type=int, default=None, help="기본: config.toml [retention] keep_last_auto")
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(fn=cmd_prune)
+    s = sub.add_parser("gc", help="참조 없는 객체 파일 삭제"); s.add_argument("project")
+    s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_gc)
     s = sub.add_parser("bridge-install"); s.add_argument("project"); s.set_defaults(fn=cmd_bridge_install)
     s = sub.add_parser("bridge-status"); s.add_argument("project"); s.set_defaults(fn=cmd_bridge_status)
     s = sub.add_parser("watch"); s.add_argument("project")

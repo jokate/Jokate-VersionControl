@@ -165,15 +165,20 @@ class Store:
         rows = self.db.execute("SELECT rel,sha,size,cls,deps,noise FROM tree WHERE snapshot_id=?", (sid,)).fetchall()
         return {r[0]: TreeEntry(r[0], r[1], r[2], r[3], json.loads(r[4]), bool(r[5])) for r in rows}
 
-    def _mark_noise(self, old_tree: dict[str, TreeEntry], entries: list[TreeEntry]) -> None:
-        """HEAD 대비 sha 가 바뀐 항목마다 리세이브만인지 판정해 noise 표시(예외·파싱 실패는 False)."""
+    def _mark_noise(self, old_tree: dict[str, TreeEntry], entries: list[TreeEntry],
+                    *, from_objects: bool = False) -> None:
+        """부모 트리 대비 sha 가 바뀐 항목마다 리세이브만인지 판정해 noise 표시(예외·파싱 실패는 False).
+
+        from_objects=True 면 새 쪽도 작업 트리 파일이 아니라 store 객체를 읽는다(스냅샷 대 스냅샷).
+        """
         for e in entries:
             o = old_tree.get(e.rel)
             if o is None or o.sha == e.sha:
                 e.noise = False
                 continue
+            new_path = self.object_path(e.sha) if from_objects else self.cfg.content / e.rel
             try:
-                e.noise = is_resave_only(self.object_path(o.sha), self.cfg.content / e.rel)
+                e.noise = is_resave_only(self.object_path(o.sha), new_path)
             except Exception:
                 e.noise = False
 
@@ -365,6 +370,135 @@ class Store:
             reloaded = int(r.get("reloaded") or 0)
         result, _, _ = self.snap(f"롤백: #{sid}", kind="label", force=True)
         return RestoreResult(safety=safety, result=result, written=written, deleted=deleted, reloaded=reloaded)
+
+    # ---- 정리(보관기간·묶기·GC) ----
+    def delete_snapshots(self, ids: list[int]) -> int:
+        """스냅샷 여러 개 삭제(한 트랜잭션). HEAD 는 절대 지우지 않는다.
+
+        지우는 스냅샷을 parent 로 가진 스냅샷은 (연쇄적으로) 살아남는 조상으로 다시 잇고,
+        부모가 바뀐 스냅샷의 tree.noise 는 새 부모 기준으로 다시 계산한다. 반환: 지운 개수.
+        """
+        head = self.head()
+        want = {int(i) for i in ids}
+        if head is not None:
+            want.discard(head.id)
+        parents = {s.id: s.parent for s in self.log()}
+        targets = sorted(i for i in want if i in parents)
+        if not targets:
+            return 0
+        tset = set(targets)
+
+        def survivor(p: int | None) -> int | None:
+            seen: set[int] = set()
+            while p is not None and p in tset and p not in seen:
+                seen.add(p)
+                p = parents.get(p)
+            return p
+
+        rewired = [(sid, survivor(par)) for sid, par in parents.items()
+                   if sid not in tset and par is not None and par in tset]
+        cur = self.db.cursor()
+        try:
+            for sid, newpar in rewired:
+                cur.execute("UPDATE snapshots SET parent=? WHERE id=?", (newpar, sid))
+            cur.executemany("DELETE FROM tree WHERE snapshot_id=?", [(i,) for i in targets])
+            cur.executemany("DELETE FROM snapshots WHERE id=?", [(i,) for i in targets])
+            for sid, newpar in rewired:
+                old_tree = self.tree(newpar)
+                entries = list(self.tree(sid).values())
+                self._mark_noise(old_tree, entries, from_objects=True)
+                cur.executemany("UPDATE tree SET noise=? WHERE snapshot_id=? AND rel=?",
+                                [(int(e.noise), sid, e.rel) for e in entries])
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return len(targets)
+
+    def squash(self, ids: list[int], message: str = "") -> tuple[Snapshot, int]:
+        """연속된 사슬(부모-자식)인 스냅샷들을 마지막 하나로 묶는다.
+
+        마지막(가장 큰 id) 스냅샷만 kind=label + message 로 남기고 나머지는 삭제.
+        사슬이 아니거나 2개 미만이면 ValueError. 반환 (남은 스냅샷, 지운 수).
+        """
+        want = sorted({int(i) for i in ids})
+        if len(want) < 2:
+            raise ValueError("묶으려면 스냅샷이 2개 이상이어야 한다")
+        snaps = []
+        for i in want:
+            s = self.get(i)
+            if s is None:
+                raise ValueError(f"snapshot {i} 없음")
+            snaps.append(s)
+        for a, b in zip(snaps, snaps[1:]):
+            if b.parent != a.id:
+                raise ValueError(f"#{a.id} → #{b.id} 는 연속된 사슬이 아니다")
+        keep = snaps[-1]
+        self.db.execute("UPDATE snapshots SET kind='label', message=? WHERE id=?", (message, keep.id))
+        removed = self.delete_snapshots([s.id for s in snaps[:-1]])
+        self.db.commit()
+        self.gc()
+        kept = self.get(keep.id)
+        assert kept is not None
+        return kept, removed
+
+    def prune(self, auto_days: int = 14, keep_last_auto: int = 30,
+              now: float | None = None, dry_run: bool = False) -> list[int]:
+        """오래된 auto 스냅샷 정리. label·HEAD·최신 keep_last_auto 개는 남긴다.
+
+        auto_days 가 0 이하면 아무것도 하지 않는다. 반환: 지울(지운) id 목록(오름차순).
+        """
+        if auto_days <= 0:
+            return []
+        now = time.time() if now is None else now
+        cutoff = now - auto_days * 86400
+        head = self.head()
+        autos = [s for s in self.log() if s.kind == "auto"]        # id 내림차순
+        keep_ids = {s.id for s in autos[:max(0, keep_last_auto)]}
+        victims = sorted(s.id for s in autos
+                         if s.ts < cutoff and s.id not in keep_ids and (head is None or s.id != head.id))
+        if dry_run or not victims:
+            return victims
+        self.delete_snapshots(victims)
+        self.gc()
+        return victims
+
+    def gc(self, dry_run: bool = False, exclude_snapshots: list[int] | None = None) -> tuple[int, int]:
+        """어떤 tree 행도 참조하지 않는 객체 파일 삭제. 반환 (개수, 바이트).
+
+        exclude_snapshots 의 스냅샷은 '이미 지워졌다' 치고 계산한다(정리 예고용).
+        .tmp 잔여물과 빈 하위 폴더도 함께 치운다(개수에는 세지 않음).
+        """
+        ex = [int(i) for i in (exclude_snapshots or [])]
+        q = "SELECT DISTINCT sha FROM tree"
+        if ex:
+            q += " WHERE snapshot_id NOT IN (%s)" % ",".join("?" * len(ex))
+        refs = {r[0] for r in self.db.execute(q, ex).fetchall()}
+        if not self.objects.exists():
+            return 0, 0
+        count = 0
+        freed = 0
+        for p in list(self.objects.rglob("*")):
+            if not p.is_file():
+                continue
+            if p.suffix == ".tmp":
+                if not dry_run:
+                    p.unlink(missing_ok=True)
+                continue
+            if p.name in refs:
+                continue
+            freed += p.stat().st_size
+            count += 1
+            if not dry_run:
+                p.unlink(missing_ok=True)
+        if not dry_run:
+            for d in sorted((d for d in self.objects.rglob("*") if d.is_dir()),
+                            key=lambda d: len(d.parts), reverse=True):
+                try:
+                    d.rmdir()
+                except OSError:
+                    pass
+        return count, freed
 
     def close(self) -> None:
         self.db.close()

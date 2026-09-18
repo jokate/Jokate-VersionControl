@@ -83,6 +83,8 @@
   .snap.noise::after { background:var(--n); box-shadow:0 0 0 2px #6a5f2a; }
   .snap:hover { background:rgba(255,255,255,.03); }
   .snap.sel { background:linear-gradient(90deg, rgba(108,140,255,.14), transparent); border-left-color:var(--acc); }
+  .snap.msel { box-shadow:inset 0 0 0 1px var(--acc); border-radius:8px; }
+  .stat .v .mini { margin-left:8px; vertical-align:middle; }
   .snap .msg { font-weight:600; display:flex; align-items:center; gap:6px; }
   .snap.auto .msg { color:var(--fg2); font-weight:500; }
   .snap .id { font-size:11px; color:var(--dim); font-variant-numeric:tabular-nums; }
@@ -235,7 +237,7 @@
   <div class="stat hot"><div class="l">올릴 변경</div><div class="v" id="stChanges">–</div></div>
   <div class="stat"><div class="l">스냅샷</div><div class="v" id="stSnaps">–</div></div>
   <div class="stat"><div class="l">추적 애셋</div><div class="v" id="stAssets">–</div></div>
-  <div class="stat"><div class="l">저장소</div><div class="v" id="stStore">–</div></div>
+  <div class="stat"><div class="l">저장소</div><div class="v"><span id="stStore">–</span><button id="pruneBtn" class="ghost small mini" title="오래된 자동 스냅샷과 참조 없는 객체 정리">정리</button></div></div>
   <div class="stat"><div class="l">마지막 스냅샷</div><div class="v" id="stLast">–</div></div>
 </div>
 <main>
@@ -258,6 +260,7 @@
 const KIND = {added:'추가', modified:'수정', resave:'리세이브', moved:'이동', deleted:'삭제'};
 const ORDER = ['modified','added','moved','deleted','resave'];
 let selected = null, selectedRel = null, headId = null, lastLog = [];
+let tlSel = new Set(), tlAnchor = null;      // 타임라인 다중 선택 (Ctrl 토글 · Shift 범위)
 let searchHits = null, searchTimer = null;   // searchHits: Map<snapshot id, {matched, by}> · null = 검색 안 함
 const NOISE_KEY = 'jokate.showNoise';
 let showNoise = localStorage.getItem(NOISE_KEY) === '1';
@@ -480,15 +483,99 @@ function renderTimeline() {
     if (!searchHits && s.all_noise && !showNoise && s.id !== selected) { hidden.push(s.id); continue; }
     flush();
     const div = document.createElement('div');
-    div.className = `snap ${s.kind}` + (s.all_noise ? ' noise' : '') + (s.id === selected ? ' sel' : '');
+    div.className = `snap ${s.kind}` + (s.all_noise ? ' noise' : '') + (s.id === selected ? ' sel' : '')
+      + (tlSel.has(s.id) ? ' msel' : '');
     div.dataset.id = s.id;
     div.innerHTML = `<div class="msg"><span class="id">#${s.id}</span>${esc(s.message || (s.kind === 'auto' ? '자동 저장' : ''))}${s.all_noise ? ' <span class="badge noise">리세이브만</span>' : ''}</div>
       <div class="meta">${esc(s.time)} · ${s.total}개 추적</div>
       <div class="counts">${pills(s.counts)}</div><div>${badges(s.by_class)}</div>` + hitsHtml(hit);
-    div.onclick = () => select(s.id);
+    div.onclick = e => snapClick(s.id, e);
+    div.oncontextmenu = e => snapMenu(s.id, e);
     tl.appendChild(div);
   }
   flush();
+}
+
+// ---- 타임라인 다중 선택 ----
+const tlIds = () => [...document.querySelectorAll('#timeline .snap')].map(e => +e.dataset.id);
+function paintTlSel() {
+  document.querySelectorAll('#timeline .snap').forEach(e => e.classList.toggle('msel', tlSel.has(+e.dataset.id)));
+}
+function snapClick(id, e) {
+  if (e.ctrlKey || e.metaKey) {
+    tlSel.has(id) ? tlSel.delete(id) : tlSel.add(id);
+    tlAnchor = id; paintTlSel(); return;
+  }
+  if (e.shiftKey) {
+    const ids = tlIds(), a = ids.indexOf(tlAnchor == null ? id : tlAnchor), b = ids.indexOf(id);
+    if (a >= 0 && b >= 0) { const lo = Math.min(a, b), hi = Math.max(a, b); for (let i = lo; i <= hi; i++) tlSel.add(ids[i]); }
+    else tlSel.add(id);
+    paintTlSel(); return;
+  }
+  tlSel.clear(); paintTlSel(); select(id);
+}
+// 선택이 부모-자식으로 이어진 사슬이면 오름차순 id 목록, 아니면 null
+function tlChain() {
+  const ids = [...tlSel].sort((a, b) => a - b);
+  if (ids.length < 2) return null;
+  const by = new Map(lastLog.map(s => [s.id, s]));
+  for (let i = 1; i < ids.length; i++) { const s = by.get(ids[i]); if (!s || s.parent !== ids[i - 1]) return null; }
+  return ids;
+}
+function snapMenu(id, e) {
+  e.preventDefault();
+  if (!tlSel.has(id)) { if (!e.ctrlKey) tlSel.clear(); tlSel.add(id); tlAnchor = id; paintTlSel(); }
+  const chain = tlChain();
+  openMenu(e.clientX, e.clientY, [
+    {ic:'🗜', label:`선택한 ${tlSel.size}개를 하나로 묶고 이름 붙이기`, disabled: !chain, run: () => squashFlow(chain)},
+    {ic:'⟲', label:`이 스냅샷(#${id})으로 되돌리기`, run: () => restoreFlow(id, [])},
+  ]);
+}
+function squashPrompt(n) {
+  return new Promise(res => {
+    openModal(`<h3>스냅샷 ${n}개를 하나로 묶기</h3>
+      <div class="hint">연속된 스냅샷을 마지막 하나로 합치고 이름을 붙입니다. 중간 스냅샷은 삭제되고, 남는 스냅샷은 그대로 온전합니다.</div>
+      <input id="sqmsg" placeholder="묶은 스냅샷 이름" maxlength="200">
+      <div class="btns"><button id="sqcancel" class="ghost">취소</button><button id="sqok">묶기</button></div>`);
+    const inp = $('#sqmsg'); inp.focus();
+    const done = v => { closeModal(); res(v); };
+    $('#sqcancel').onclick = () => done(null);
+    $('#sqok').onclick = () => { const v = inp.value.trim(); if (!v) { inp.focus(); return; } done(v); };
+    inp.onkeydown = ev => { if (ev.key === 'Enter') $('#sqok').click(); };
+  });
+}
+async function squashFlow(ids) {
+  if (!ids) return;
+  const message = await squashPrompt(ids.length);
+  if (!message) return;
+  try {
+    const r = await api('/api/squash', {method:'POST', headers:JSONH, body:JSON.stringify({ids, message})});
+    tlSel.clear(); tlAnchor = null;
+    await loadLog(); await select(r.snapshot.id);
+    toast(`#${r.snapshot.id} 로 묶음 · 스냅샷 ${r.removed}개 정리`);
+  } catch (e) { toast('오류: ' + e.message, true); }
+}
+async function pruneFlow() {
+  let pre;
+  try { pre = await api('/api/prune', {method:'POST', headers:JSONH, body:JSON.stringify({dry_run:true})}); }
+  catch (e) { toast('오류: ' + e.message, true); return; }
+  if (!pre.ids.length && !pre.objects) { toast('정리할 것이 없습니다'); return; }
+  const ok = await new Promise(res => {
+    openModal(`<h3>저장소 정리</h3>
+      <div class="hint">오래된 자동 스냅샷 ${pre.ids.length}개와 객체 ${pre.objects}개(${fmtB(pre.bytes)})를 지웁니다. 라벨 스냅샷은 지우지 않습니다.</div>
+      <div class="btns"><button id="pcancel" class="ghost">취소</button><button id="pok">정리</button></div>`);
+    const done = v => { closeModal(); res(v); };
+    $('#pcancel').onclick = () => done(false);
+    $('#pok').onclick = () => done(true);
+    $('#pok').focus();
+  });
+  if (!ok) return;
+  try {
+    const r = await api('/api/prune', {method:'POST', headers:JSONH, body:JSON.stringify({dry_run:false})});
+    tlSel.clear();
+    await loadLog();
+    toast(`정리 완료 · 스냅샷 ${r.ids.length}개, 객체 ${r.objects}개 ${fmtB(r.bytes)}`);
+  } catch (e) { toast('오류: ' + e.message, true); }
 }
 // ---- 검색 ----
 const QHINT = '라벨 = 밝은 점 · 자동 = 흐린 점';
@@ -772,6 +859,7 @@ async function openFromQuery() {
     $('#history').scrollIntoView({block: 'start'});
   } else if (asset) status('스냅샷이 없어 히스토리를 열 수 없음: ' + asset);
 }
+$('#pruneBtn').onclick = () => pruneFlow();
 (async () => { await loadLog(); await loadStatus(); await loadDaemon(); await openFromQuery(); })();
 </script>
 </body>
