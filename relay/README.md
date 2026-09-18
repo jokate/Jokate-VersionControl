@@ -67,6 +67,7 @@ relay\run.bat C:\path\my-prompt.txt                    임의 파일
 
 | 순서 | 파일 | 내용 | 의존 |
 |---|---|---|---|
+| 0 | `18c-unlock-before-write.txt` | **긴급** — 에디터가 로드해 둔 애셋을 되돌리면 PermissionError. 쓰기 전에 브릿지로 unload(release), 사전 잠금 검사, tmp 정리 | 18 |
 | 1 | `17-layout.txt` | 웹 UI 레이아웃 조정: 경계선 드래그 3개, 패널 접기, 상세 크게 보기, 보기 옵션, localStorage 저장 | — |
 | 2 | `18b-editor-only-diff.txt` | 에디터가 켜져 있으면 diff 실패 시에도 두 번째 에디터를 띄우지 않음, 꺼져 있을 때만 확인 후 새 프로세스 | 18 |
 | 3 | `19a-baseline-store.txt` | '올린 것(baseline)'과 '자동 기록'을 분리 — 자동 스냅샷이 찍혀도 변경사항 패널이 비지 않게. 저장소·CLI | — |
