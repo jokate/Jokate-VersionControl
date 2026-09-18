@@ -9,7 +9,9 @@ JSON API
   GET  /api/asset?rel=<rel>          애셋 버전 히스토리 (스냅샷별 sha·size·변경여부, 최신순)
   GET  /api/thumb?sha=<sha>          store 객체의 첫 썸네일 (image/jpeg|png, 없으면 404, 메모리 캐시)
   GET  /api/restore/<id>?asset=<rel> plan_restore 드라이런 (diff + broken + dependents). 적용 없음
-  POST /api/snap  {message}          label 스냅샷
+  GET  /api/status                   HEAD 대비 아직 올리지 않은 변경 {diff}
+  POST /api/snap  {message, only?:[rel]}   label 스냅샷 (only 있으면 부분 스냅샷)
+  POST /api/restore/<id> {assets?:[rel], discard_dirty?:bool}  롤백 적용. 중단(dirty·브릿지) → 409 {ok:false,error,dirty}
   GET  /                             web_static/index.html
 
 핸들러 로직은 api_* 순수 함수로 분리해 서버 없이 테스트한다.
@@ -23,7 +25,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from .config import Config
-from .store import Diff, Snapshot, Store, TreeEntry, diff_trees, format_ts
+from .store import Diff, RestoreBlocked, Snapshot, Store, TreeEntry, diff_trees, format_ts
 from .uasset import read_package
 
 STATIC = Path(__file__).parent / "web_static"
@@ -105,9 +107,36 @@ def api_restore(store: Store, sid: int, assets: list[str] | None = None) -> dict
             "dependents": [{"rel": r, "dep": d} for r, d in plan.dependents]}
 
 
-def api_snap_create(store: Store, message: str) -> dict:
-    snap, d, stored = store.snap(message, kind="label", force=True)
+def api_status(store: Store) -> dict:
+    """HEAD 대비 아직 올리지 않은 변경."""
+    return {"diff": _diff(store.status())}
+
+
+def api_snap_create(store: Store, message: str, only: list[str] | None = None) -> dict:
+    """only 가 비면 전체(변경 없어도 생성). only 가 있으면 부분 스냅샷 — 선택한 것에 변경 없으면 snapshot=None."""
+    only = [str(x) for x in (only or []) if str(x).strip()]
+    snap, d, stored = store.snap(message, kind="label", force=not only, only=only or None)  # KeyError → 404
     return {"snapshot": _snapshot(snap) if snap else None, "diff": _diff(d), "stored": stored}
+
+
+def api_restore_apply(store: Store, sid: int, assets: list[str] | None = None,
+                      discard_dirty: bool = False) -> dict:
+    """plan_restore → apply_restore. RestoreBlocked(→409)/KeyError(→404) 는 호출자가 처리."""
+    plan = store.plan_restore(sid, assets or None)
+    r = store.apply_restore(plan, discard_dirty=discard_dirty)
+    return {"ok": True, "safety": _snapshot(r.safety), "result": _snapshot(r.result),
+            "written": r.written, "deleted": r.deleted, "reloaded": r.reloaded}
+
+
+def error_response(e: BaseException) -> tuple[int, dict]:
+    """예외 → (HTTP 코드, JSON 본문). RestoreBlocked 는 409 + dirty 목록."""
+    if isinstance(e, RestoreBlocked):
+        return 409, {"ok": False, "error": str(e), "dirty": list(e.dirty)}
+    if isinstance(e, (NotFound, KeyError)):
+        return 404, {"error": str(e)}
+    if isinstance(e, ValueError):   # json.JSONDecodeError 포함
+        return 400, {"error": str(e)}
+    return 500, {"error": f"{type(e).__name__}: {e}"}
 
 
 _thumb_cache: dict[str, tuple[str, bytes] | None] = {}
@@ -179,6 +208,8 @@ def make_handler(cfg: Config):
                     self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
                 elif path == "/api/log":
                     self._json(self._run(api_log))
+                elif path == "/api/status":
+                    self._json(self._run(api_status))
                 elif path.startswith("/api/snap/"):
                     sid = int(path.rsplit("/", 1)[1])
                     self._json(self._run(lambda st: api_snap(st, sid)))
@@ -199,12 +230,9 @@ def make_handler(cfg: Config):
                     self._json(self._run(lambda st: api_restore(st, sid, assets)))
                 else:
                     raise NotFound(path)
-            except (NotFound, KeyError) as e:
-                self._json({"error": str(e)}, 404)
-            except ValueError as e:
-                self._json({"error": str(e)}, 400)
             except Exception as e:  # noqa: BLE001
-                self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+                code, payload = error_response(e)
+                self._json(payload, code)
 
         def do_POST(self) -> None:
             u = urlsplit(self.path)
@@ -216,15 +244,22 @@ def make_handler(cfg: Config):
                     message = str(body.get("message", "")).strip()
                     if not message:
                         raise ValueError("message 필요")
-                    self._json(self._run(lambda st: api_snap_create(st, message)))
+                    only = body.get("only") or []
+                    if not isinstance(only, list):
+                        raise ValueError("only 는 rel 목록")
+                    self._json(self._run(lambda st: api_snap_create(st, message, only)))
+                elif u.path.startswith("/api/restore/"):
+                    sid = int(u.path.rsplit("/", 1)[1])
+                    assets = body.get("assets") or []
+                    if not isinstance(assets, list):
+                        raise ValueError("assets 는 rel 목록")
+                    discard = bool(body.get("discard_dirty", False))
+                    self._json(self._run(lambda st: api_restore_apply(st, sid, [str(x) for x in assets], discard)))
                 else:
                     raise NotFound(u.path)
-            except NotFound as e:
-                self._json({"error": str(e)}, 404)
-            except (ValueError, json.JSONDecodeError) as e:
-                self._json({"error": str(e)}, 400)
             except Exception as e:  # noqa: BLE001
-                self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+                code, payload = error_response(e)
+                self._json(payload, code)
 
     return Handler
 

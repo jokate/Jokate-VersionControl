@@ -23,7 +23,8 @@ python -m jokate init    <project>            # .jokate/config.toml 생성
 python -m jokate scan    <project>            # Content 스캔 → .jokate/scan.json
 python -m jokate table   <project> --tier authored [--cls Blueprint]
 python -m jokate inspect <file.uasset> [--thumb out.jpg]
-python -m jokate snap    <project> [-m "메시지"]  # authored 스냅샷. -m 있으면 label, 없으면 auto. 변경 없으면 생략(--force)
+python -m jokate snap    <project> [-m "메시지"] [--only rel ...]  # authored 스냅샷. -m 있으면 label, 없으면 auto. 변경 없으면 생략(--force). --only 는 부분 스냅샷(지정한 것만 올리고 나머지는 HEAD 유지)
+python -m jokate status  <project>                # HEAD 대비 아직 올리지 않은 변경 (없으면 '올릴 변경 없음')
 python -m jokate log     <project>               # 스냅샷 목록
 python -m jokate show    <project> <id>          # 직전 스냅샷 대비 추가(A)/수정(M)/이동(R)/삭제(D) + 클래스별 집계
 python -m jokate restore <project> <id> [--asset rel ...] [--apply] [--discard-dirty]   # 롤백. 기본 드라이런, --apply 로 적용
@@ -39,7 +40,8 @@ python -m jokate serve   <project> [--port 8765]                      # 타임�
 - 왼쪽 타임라인(label 진하게 / auto 흐리게, `수정 3 · 추가 1` 건수 + 클래스 배지), 오른쪽 선택 스냅샷의 A/M/R/D 목록
 - 목록 항목을 클릭하면 하단에 그 애셋의 버전 히스토리 + 버전별 썸네일(패키지 헤더의 첫 썸네일)
 - 상단 메시지 입력 + '스냅샷 만들기'(label), 상세의 '이 시점으로 되돌리기 미리보기'(드라이런 + 참조 경고만, 적용은 CLI `restore --apply`)
-- JSON API: `GET /api/log`, `GET /api/snap/<id>`, `GET /api/asset?rel=`, `GET /api/thumb?sha=`, `GET /api/restore/<id>[?asset=]`, `POST /api/snap {message}`
+- JSON API: `GET /api/log`, `GET /api/status`, `GET /api/snap/<id>`, `GET /api/asset?rel=`, `GET /api/thumb?sha=`, `GET /api/restore/<id>[?asset=]`, `POST /api/snap {message, only?:[rel]}`, `POST /api/restore/<id> {assets?:[rel], discard_dirty?:bool}`
+- `POST /api/restore/<id>` 는 plan_restore→apply_restore 실행. 성공 `{ok:true, safety, result, written, deleted}`; 에디터 dirty·브릿지 없음으로 중단되면 409 `{ok:false, error, dirty:[...]}` (`store.RestoreBlocked`), 그 외 500. (UI 연결은 다음 단계)
 
 ## 자동 스냅샷 (watch)
 

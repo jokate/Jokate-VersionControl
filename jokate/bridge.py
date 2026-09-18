@@ -28,18 +28,28 @@ def bridge_dir(cfg: Config) -> Path:
     return cfg.state_dir / "bridge"
 
 
-def heartbeat_age(cfg: Config) -> float | None:
-    """heartbeat.json 의 ts 로부터 지난 초. 파일이 없거나 깨졌으면 None."""
+def heartbeat_age(cfg: Config, now: float | None = None) -> float | None:
+    """heartbeat.json 의 ts 로부터 지난 초(now 주입 가능). 파일이 없거나 깨졌으면 None.
+
+    에디터 쪽이 tmp.replace 로 갈아끼우는 순간 Windows 에서 읽기가 OSError 로 튈 수 있어 짧게 재시도한다.
+    """
     p = bridge_dir(cfg) / "heartbeat.json"
-    try:
-        ts = float(json.loads(p.read_text(encoding="utf-8"))["ts"])
-    except (OSError, ValueError, KeyError, TypeError):
+    ts: float | None = None
+    for _ in range(3):
+        try:
+            ts = float(json.loads(p.read_text(encoding="utf-8"))["ts"])
+            break
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError, KeyError, TypeError):
+            time.sleep(0.02)
+    if ts is None:
         return None
-    return max(0.0, time.time() - ts)
+    return max(0.0, (time.time() if now is None else now) - ts)
 
 
-def bridge_alive(cfg: Config, max_age: float = HEARTBEAT_MAX_AGE) -> bool:
-    age = heartbeat_age(cfg)
+def bridge_alive(cfg: Config, max_age: float = HEARTBEAT_MAX_AGE, now: float | None = None) -> bool:
+    age = heartbeat_age(cfg, now)
     return age is not None and age <= max_age
 
 

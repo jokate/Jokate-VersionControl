@@ -93,3 +93,53 @@ def test_api_thumb(st: storemod.Store) -> None:
     assert sha in web._thumb_cache  # 없음도 캐시
     assert web.api_thumb(st, "zz") is None and web.api_thumb(st, "") is None
     assert web.api_thumb(st, "0" * 64) is None  # 객체 없음
+
+
+def test_api_status_and_snap_only(st: storemod.Store) -> None:
+    assert web.api_status(st)["diff"]["counts"] == {"added": 0, "modified": 0, "moved": 0, "deleted": 0}
+    foo = st.cfg.content / "Foo"
+    (foo / "A.uasset").write_bytes(b"AAAA-v3")
+    (foo / "D.uasset").write_bytes(b"DDDD")
+    d = web.api_status(st)["diff"]
+    assert d["counts"] == {"added": 1, "modified": 1, "moved": 0, "deleted": 0}
+    r = web.api_snap_create(st, "부분", ["Foo/A.uasset"])
+    assert r["snapshot"]["id"] == 3 and r["stored"] == 1
+    assert r["diff"]["counts"] == {"added": 0, "modified": 1, "moved": 0, "deleted": 0}
+    assert set(st.tree(3)) == {"Foo/A.uasset", "Foo/B.uasset", "Foo/C2.uasset"}
+    assert web.api_status(st)["diff"]["counts"]["added"] == 1   # D 는 아직 안 올라감
+    assert web.api_snap_create(st, "무변경", ["Foo/A.uasset"])["snapshot"] is None
+    with pytest.raises(KeyError):
+        web.api_snap_create(st, "x", ["Nope.uasset"])
+
+
+def test_api_restore_apply(st: storemod.Store, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(storemod, "editor_running", lambda: False)
+    r = web.api_restore_apply(st, 1, ["Foo/A.uasset"], False)
+    assert r["ok"] is True and r["safety"]["id"] == 3 and r["result"]["id"] == 4
+    assert r["written"] == 1 and r["deleted"] == 0 and r["reloaded"] is None
+    assert (st.cfg.content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v1"
+    assert (st.cfg.content / "Foo" / "B.uasset").exists()   # 나머지는 유지
+    with pytest.raises(KeyError):
+        web.api_restore_apply(st, 99)
+
+
+def test_api_restore_apply_blocked(st: storemod.Store, monkeypatch: pytest.MonkeyPatch) -> None:
+    from jokate import bridge
+    monkeypatch.setattr(storemod, "editor_running", lambda: True)
+    monkeypatch.setattr(bridge, "bridge_alive", lambda cfg, *a, **k: True)
+    monkeypatch.setattr(bridge, "request", lambda cfg, op, pkgs, args=None, **k: {"ok": True, "dirty": list(pkgs)})
+    with pytest.raises(storemod.RestoreBlocked) as ei:
+        web.api_restore_apply(st, 1, ["Foo/A.uasset"], False)
+    assert ei.value.dirty == ["/Game/Foo/A"]
+    code, body = web.error_response(ei.value)
+    assert code == 409 and body["ok"] is False and body["dirty"] == ["/Game/Foo/A"] and "저장 안 된" in body["error"]
+    assert (st.cfg.content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v2" and st.head().id == 2
+    # 브릿지 없음도 409, dirty 는 빈 목록
+    monkeypatch.setattr(bridge, "bridge_alive", lambda cfg, *a, **k: False)
+    with pytest.raises(storemod.RestoreBlocked) as ei2:
+        web.api_restore_apply(st, 1)
+    assert web.error_response(ei2.value)[0] == 409 and ei2.value.dirty == []
+    # 그 외 매핑
+    assert web.error_response(KeyError("x"))[0] == 404
+    assert web.error_response(ValueError("x"))[0] == 400
+    assert web.error_response(RuntimeError("x"))[0] == 500

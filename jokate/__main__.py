@@ -84,13 +84,31 @@ def cmd_snap(a: argparse.Namespace) -> int:
     cfg = cfgmod.load(a.project)
     st = storemod.Store(cfg)
     t0 = time.time()
-    snap, d, stored = st.snap(a.message or "", force=a.force)
+    try:
+        snap, d, stored = st.snap(a.message or "", force=a.force, only=a.only or None)
+    except KeyError as e:
+        print(e, file=sys.stderr)
+        return 1
     if snap is None:
         print("변경 없음 — 스냅샷을 만들지 않았다")
         return 0
     print(f"snapshot #{snap.id} ({snap.kind}) {snap.message}".rstrip())
     print(storemod.format_diff(d))
     print(f"새 객체 {stored}개  ({time.time() - t0:.1f}s)")
+    return 0
+
+
+def cmd_status(a: argparse.Namespace) -> int:
+    from . import store as storemod
+    cfg = cfgmod.load(a.project)
+    st = storemod.Store(cfg)
+    d = st.status()
+    if d.empty:
+        print("올릴 변경 없음")
+        return 0
+    head = st.head()
+    print(f"HEAD #{head.id if head else '-'} 대비 올리지 않은 변경:")
+    print(storemod.format_diff(d))
     return 0
 
 
@@ -192,7 +210,10 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("table"); s.add_argument("project"); s.add_argument("--tier"); s.add_argument("--cls")
     s.set_defaults(fn=cmd_table)
     s = sub.add_parser("snap"); s.add_argument("project"); s.add_argument("-m", "--message")
-    s.add_argument("--force", action="store_true", help="변경 없어도 스냅샷 생성"); s.set_defaults(fn=cmd_snap)
+    s.add_argument("--force", action="store_true", help="변경 없어도 스냅샷 생성")
+    s.add_argument("--only", nargs="+", metavar="REL", help="이 애셋만 올림(부분 스냅샷, 나머지는 HEAD 유지)")
+    s.set_defaults(fn=cmd_snap)
+    s = sub.add_parser("status"); s.add_argument("project"); s.set_defaults(fn=cmd_status)
     s = sub.add_parser("log"); s.add_argument("project"); s.set_defaults(fn=cmd_log)
     s = sub.add_parser("show"); s.add_argument("project"); s.add_argument("id", type=int); s.set_defaults(fn=cmd_show)
     s = sub.add_parser("restore"); s.add_argument("project"); s.add_argument("id", type=int)

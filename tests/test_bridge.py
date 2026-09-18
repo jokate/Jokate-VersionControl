@@ -153,6 +153,20 @@ def test_cli_bridge_install_and_status(project: Path, capsys: pytest.CaptureFixt
     assert (pydir / "init_unreal.py").read_text(encoding="utf-8").count("jokate_bridge") == 1
     assert cli.main(["bridge-status", str(project)]) == 1
     assert "브릿지 없음" in capsys.readouterr().out
-    with FakeEditor(cfgmod.load(project)):
-        assert cli.main(["bridge-status", str(project)]) == 0
+    # 스레드 heartbeat 대신 정적 파일(넉넉한 미래 ts → 나이 0) 로 결정적으로 판정
+    cfg = cfgmod.load(project)
+    d = bridge.bridge_dir(cfg); d.mkdir(parents=True, exist_ok=True)
+    bridge._write_json(d / "heartbeat.json", {"ts": time.time() + 3600})
+    assert cli.main(["bridge-status", str(project)]) == 0
     assert "살아 있음" in capsys.readouterr().out
+    bridge._write_json(d / "heartbeat.json", {"ts": time.time() - 3600})
+    assert cli.main(["bridge-status", str(project)]) == 1
+    assert "끊김" in capsys.readouterr().out
+
+
+def test_heartbeat_age_now_injection(project: Path) -> None:
+    cfg = cfgmod.load(project)
+    d = bridge.bridge_dir(cfg); d.mkdir(parents=True)
+    bridge._write_json(d / "heartbeat.json", {"ts": 1000.0})
+    assert bridge.heartbeat_age(cfg, now=1002.5) == 2.5
+    assert bridge.bridge_alive(cfg, now=1002.5) and not bridge.bridge_alive(cfg, now=1004.0)

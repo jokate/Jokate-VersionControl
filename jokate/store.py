@@ -141,21 +141,47 @@ class Store:
         rows = self.db.execute("SELECT rel,sha,size,cls,deps FROM tree WHERE snapshot_id=?", (sid,)).fetchall()
         return {r[0]: TreeEntry(r[0], r[1], r[2], r[3], json.loads(r[4])) for r in rows}
 
+    def _work_tree(self) -> dict[str, TreeEntry]:
+        return {r.rel: TreeEntry(r.rel, r.sha, r.size, r.cls, r.deps) for r in self.scan_authored()}
+
+    def status(self) -> Diff:
+        """HEAD 트리 → 작업 트리(디스크) Diff. 아직 스냅샷에 올리지 않은 변경."""
+        parent = self.head()
+        return diff_trees(self.tree(parent.id if parent else None), self._work_tree())
+
     def snap(self, message: str = "", *, kind: str | None = None,
-             force: bool = False) -> tuple[Snapshot | None, Diff, int]:
-        """작업 트리를 스냅샷으로 저장. 반환 (snapshot|None(변경 없음), diff, 새 객체 수)."""
+             force: bool = False, only: list[str] | None = None) -> tuple[Snapshot | None, Diff, int]:
+        """작업 트리를 스냅샷으로 저장. 반환 (snapshot|None(변경 없음), diff, 새 객체 수).
+
+        only 가 있으면 부분 스냅샷: HEAD 트리 복사본에 only 의 rel 만 디스크 상태로 갱신(디스크에 없으면 제거),
+        나머지는 HEAD 그대로. only 의 rel 이 HEAD 에도 디스크에도 없으면 KeyError.
+        """
         if kind is None:
             kind = "label" if message else "auto"
-        recs = self.scan_authored()
-        new_tree = {r.rel: TreeEntry(r.rel, r.sha, r.size, r.cls, r.deps) for r in recs}
+        work = self._work_tree()
         parent = self.head()
         old_tree = self.tree(parent.id if parent else None)
+        if only:
+            new_tree = dict(old_tree)
+            to_store: list[TreeEntry] = []
+            for a in only:
+                rel = a.replace("\\", "/").strip("/")
+                if rel not in work and rel not in old_tree:
+                    raise KeyError(f"{rel}: HEAD 에도 디스크에도 없음")
+                if rel in work:
+                    new_tree[rel] = work[rel]
+                    to_store.append(work[rel])
+                else:
+                    new_tree.pop(rel, None)
+        else:
+            new_tree = work
+            to_store = list(work.values())
         d = diff_trees(old_tree, new_tree)
         if d.empty and parent is not None and not force:
             return None, d, 0
         stored = 0
-        for r in recs:
-            if self.put_object(self.cfg.content / r.rel, r.sha):
+        for e in to_store:
+            if self.put_object(self.cfg.content / e.rel, e.sha):
                 stored += 1
         cur = self.db.cursor()
         cur.execute("INSERT INTO snapshots(parent,kind,message,ts) VALUES(?,?,?,?)",
@@ -244,8 +270,8 @@ class Store:
         if check_editor and editor_running():
             from . import bridge
             if not bridge.bridge_alive(self.cfg):
-                raise RuntimeError("에디터가 켜져 있는데 브릿지가 없다 — 에디터 Python 콘솔에서 "
-                                   "import jokate_bridge 실행 또는 에디터 종료")
+                raise RestoreBlocked("에디터가 켜져 있는데 브릿지가 없다 — 에디터 Python 콘솔에서 "
+                                     "import jokate_bridge 실행 또는 에디터 종료")
             use_bridge = True
         sid = plan.snapshot.id
         # 객체가 모두 있는지 먼저 확인
@@ -260,13 +286,13 @@ class Store:
             try:
                 r = bridge.request(self.cfg, "dirty", pkgs)
             except TimeoutError as e:
-                raise RuntimeError(str(e)) from e
+                raise RestoreBlocked(str(e)) from e
             if not r.get("ok"):
-                raise RuntimeError(f"에디터 dirty 확인 실패: {r.get('error')}")
+                raise RestoreBlocked(f"에디터 dirty 확인 실패: {r.get('error')}")
             dirty = list(r.get("dirty") or [])
             if dirty and not discard_dirty:
-                raise RuntimeError("에디터에 저장 안 된 패키지가 있다 (저장하거나 --discard-dirty):\n  "
-                                   + "\n  ".join(dirty))
+                raise RestoreBlocked("에디터에 저장 안 된 패키지가 있다 (저장하거나 --discard-dirty):\n  "
+                                     + "\n  ".join(dirty), dirty=dirty)
         safety, _, _ = self.snap(f"롤백 직전 #{sid}", kind="auto", force=True)
         written = 0
         for rel in to_write:
@@ -298,6 +324,14 @@ class Store:
 
     def close(self) -> None:
         self.db.close()
+
+
+class RestoreBlocked(RuntimeError):
+    """적용 전 중단(파일 변경 없음): 브릿지 없음·dirty 확인 실패·저장 안 된 패키지. dirty 에 패키지 목록."""
+
+    def __init__(self, msg: str, dirty: list[str] | None = None):
+        super().__init__(msg)
+        self.dirty: list[str] = list(dirty or [])
 
 
 @dataclass

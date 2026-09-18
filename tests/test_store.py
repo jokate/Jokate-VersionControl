@@ -111,3 +111,52 @@ def test_cli_dry_run(project: Path, capsys: pytest.CaptureFixture) -> None:
     assert "드라이런" in out and "Foo/A.uasset" in out
     assert (project / "Content" / "Foo" / "A.uasset").read_bytes() == b"AAAA-v2"
     assert cli.main(["restore", str(project), "99"]) == 1
+
+
+def test_partial_snap_and_status(project: Path) -> None:
+    """only 로 지정한 rel 만 반영, 나머지는 HEAD 유지, 객체 저장은 갱신된 것만."""
+    content = project / "Content" / "Foo"
+    st = storemod.Store(cfgmod.load(project))
+    st.snap("first")
+    assert st.status().empty
+    (content / "A.uasset").write_bytes(b"AAAA-v2")
+    (content / "B.uasset").write_bytes(b"BBBB")
+    (content / "C.uasset").unlink()
+    d = st.status()
+    assert [n.rel for _, n in d.modified] == ["Foo/A.uasset"]
+    assert [e.rel for e in d.added] == ["Foo/B.uasset"] and [e.rel for e in d.deleted] == ["Foo/C.uasset"]
+
+    s2, d2, stored = st.snap("A만", only=["Foo\\A.uasset"])
+    assert s2 is not None and stored == 1
+    assert [n.rel for _, n in d2.modified] == ["Foo/A.uasset"] and not d2.added and not d2.deleted
+    t2 = st.tree(s2.id)
+    assert set(t2) == {"Foo/A.uasset", "Foo/C.uasset"}          # B 미반영, C 는 HEAD 유지
+    assert t2["Foo/C.uasset"].sha == st.tree(1)["Foo/C.uasset"].sha
+    # 선택한 것에 변경 없으면 생성 안 함
+    assert st.snap("again", only=["Foo/A.uasset"])[0] is None
+    # 디스크에 없는 rel 을 only 로 → 트리에서 제거, 객체 저장 0
+    s3, d3, stored3 = st.snap("C삭제", only=["Foo/C.uasset"])
+    assert stored3 == 0 and [e.rel for e in d3.deleted] == ["Foo/C.uasset"]
+    assert set(st.tree(s3.id)) == {"Foo/A.uasset"}
+    rest = st.status()
+    assert [e.rel for e in rest.added] == ["Foo/B.uasset"] and not rest.modified and not rest.deleted
+    with pytest.raises(KeyError):
+        st.snap("x", only=["Foo/Nope.uasset"])
+    st.close()
+
+
+def test_cli_status_and_snap_only(project: Path, capsys: pytest.CaptureFixture) -> None:
+    assert cli.main(["snap", str(project), "-m", "first"]) == 0
+    assert cli.main(["status", str(project)]) == 0
+    assert "올릴 변경 없음" in capsys.readouterr().out
+    (project / "Content" / "Foo" / "A.uasset").write_bytes(b"AAAA-v2")
+    (project / "Content" / "Foo" / "B.uasset").write_bytes(b"BBBB")
+    assert cli.main(["status", str(project)]) == 0
+    out = capsys.readouterr().out
+    assert "M Foo/A.uasset" in out and "A Foo/B.uasset" in out
+    assert cli.main(["snap", str(project), "-m", "A만", "--only", "Foo/A.uasset"]) == 0
+    assert "M Foo/A.uasset" in capsys.readouterr().out
+    assert cli.main(["status", str(project)]) == 0
+    out = capsys.readouterr().out
+    assert "A Foo/B.uasset" in out and "M Foo/A.uasset" not in out
+    assert cli.main(["snap", str(project), "--only", "Foo/Nope.uasset"]) == 1
