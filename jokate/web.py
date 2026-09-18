@@ -19,6 +19,8 @@ JSON API
   POST /api/restore/<id> {assets?:[rel], discard_dirty?:bool}  롤백 적용. 중단(dirty·브릿지) → 409 {ok:false,error,dirty}
   POST /api/squash {ids:[id], message, include_labels}
                                           연속 스냅샷 묶기 (사슬 아니면 400, 라벨 포함이면 409+labels)
+  POST /api/uediff {rel, a, b?}            두 버전을 UE diff 창으로 (b 없으면 현재 파일).
+                                          에디터 못 찾으면 409 {ok:false,error}
   POST /api/prune  {dry_run:bool}          오래된 auto 스냅샷 정리 + GC → {ids, objects, bytes}
   GET  /                             web_static/index.html
 
@@ -34,6 +36,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from . import meta as metamod
+from . import uediff as uediffmod
 from .config import Config
 from .store import (Diff, RestoreBlocked, Snapshot, SquashHasLabels, Store, TreeEntry,
                     diff_trees, format_ts)
@@ -254,6 +257,15 @@ def api_prune(store: Store, dry_run: bool = True) -> dict:
     return {"ids": ids, "objects": objects, "bytes": size}
 
 
+def api_uediff(store: Store, rel: str, a_sha: str, b_sha: str | None = None, launcher=None) -> dict:
+    """애셋의 두 버전을 UE diff 창으로 연다. b 가 없으면 오른쪽은 작업 트리 현재 파일.
+
+    EditorNotFound(→409) / KeyError(객체 없음 →404) / ValueError(→400) 는 호출자가 처리.
+    """
+    r = uediffmod.open_diff(store, rel, a_sha, b_sha or None, launcher=launcher)
+    return {"ok": True, "pid": r["pid"], "left": r["left"], "right": r["right"]}
+
+
 class DaemonUnavailable(Exception):
     """serve 단독 모드라 데몬 조작이 불가."""
 
@@ -281,6 +293,8 @@ def api_daemon_post(control, action: str) -> dict:
 
 def error_response(e: BaseException) -> tuple[int, dict]:
     """예외 → (HTTP 코드, JSON 본문). RestoreBlocked·DaemonUnavailable·FileNotFoundError 는 409."""
+    if isinstance(e, uediffmod.EditorNotFound):
+        return 409, {"ok": False, "error": str(e)}
     if isinstance(e, DaemonUnavailable):
         return 409, {"ok": False, "error": str(e)}
     if isinstance(e, RestoreBlocked):
@@ -452,6 +466,13 @@ def make_handler(cfg: Config, control=None):
                     msg = str(body.get("message", "")).strip()
                     inc = bool(body.get("include_labels", False))
                     self._json(self._run(lambda st: api_squash(st, ids, msg, inc)))
+                elif u.path == "/api/uediff":
+                    rel = str(body.get("rel", "")).strip()
+                    a_sha = str(body.get("a", "")).strip()
+                    b_sha = str(body.get("b", "") or "").strip()
+                    if not rel or not a_sha:
+                        raise ValueError("rel, a 필요")
+                    self._json(self._run(lambda st: api_uediff(st, rel, a_sha, b_sha)))
                 elif u.path == "/api/prune":
                     dry = bool(body.get("dry_run", True))
                     self._json(self._run(lambda st: api_prune(st, dry)))

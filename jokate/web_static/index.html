@@ -21,7 +21,7 @@
   ::-webkit-scrollbar { width:10px; height:10px; }
   ::-webkit-scrollbar-thumb { background:#283042; border-radius:10px; border:2px solid transparent; background-clip:padding-box; }
   ::-webkit-scrollbar-thumb:hover { background:#36405a; background-clip:padding-box; border:2px solid transparent; }
-  button { font:inherit; border:0; border-radius:9px; padding:8px 14px; cursor:pointer; color:#fff; background:var(--accg); font-weight:600; box-shadow:0 6px 16px -6px rgba(108,140,255,.6); transition:transform .08s, filter .15s, box-shadow .15s; }
+  button { font:inherit; white-space:nowrap; border:0; border-radius:9px; padding:8px 14px; cursor:pointer; color:#fff; background:var(--accg); font-weight:600; box-shadow:0 6px 16px -6px rgba(108,140,255,.6); transition:transform .08s, filter .15s, box-shadow .15s; }
   button:hover { filter:brightness(1.08); }
   button:active { transform:translateY(1px); }
   button.ghost { background:rgba(255,255,255,.04); color:var(--fg2); border:1px solid var(--line2); box-shadow:none; font-weight:500; }
@@ -33,12 +33,12 @@
   input:focus { border-color:var(--acc); box-shadow:0 0 0 3px rgba(108,140,255,.2); }
 
   /* ---------- 헤더 ---------- */
-  header { display:flex; align-items:center; gap:12px; padding:12px 20px; border-bottom:1px solid var(--line); background:rgba(15,19,27,.75); backdrop-filter:blur(10px); position:sticky; top:0; z-index:20; }
+  header { display:flex; align-items:center; flex-wrap:wrap; row-gap:8px; gap:12px; padding:12px 20px; border-bottom:1px solid var(--line); background:rgba(15,19,27,.75); backdrop-filter:blur(10px); position:sticky; top:0; z-index:20; }
   .logo { display:flex; align-items:center; gap:10px; margin-right:8px; }
   .logo .mark { width:30px; height:30px; border-radius:9px; background:var(--accg); display:grid; place-items:center; font-weight:800; color:#0b0e14; box-shadow:0 6px 16px -4px rgba(63,210,255,.6); }
   .logo h1 { margin:0; font-size:16px; font-weight:700; letter-spacing:-.02em; }
   .logo .proj { font-size:12px; color:var(--dim); margin-left:6px; padding:2px 8px; border:1px solid var(--line2); border-radius:999px; }
-  header input { flex:1; max-width:520px; }
+  header input { flex:1 1 260px; min-width:220px; max-width:520px; }
   #status { color:var(--dim); font-size:12px; margin-left:auto; white-space:nowrap; }
   #showNoise { font-size:12px; color:var(--dim); display:flex; align-items:center; gap:6px; white-space:nowrap; cursor:pointer; user-select:none; }
   #showNoise input { accent-color:var(--acc); }
@@ -231,8 +231,16 @@
   @keyframes fade { 0%,85% { opacity:1; } 100% { opacity:0; } }
 
   @media (max-width: 900px) {
-    main { grid-template-columns:1fr; height:auto; }
-    #changes { max-height:none; }
+    /* 단일 열: 아래 카드(상세)를 보려면 body 세로 스크롤이 필요하다 */
+    html, body { height:auto; }
+    body { overflow-y:auto; min-height:100%; }
+    header { position:static; }
+    header input { flex-basis:100%; max-width:none; order:5; }
+    main { grid-template-columns:1fr; height:auto; flex:0 0 auto; }
+    .card { max-height:70vh; }
+    #changes { max-height:50vh; }
+    #tlcard { max-height:60vh; }
+    #detail { max-height:none; }
   }
 </style>
 </head>
@@ -764,7 +772,9 @@ async function showHistory(rel, tr, snapDiff) {
   selectedRel = rel;
   document.querySelectorAll('#detail tr.row').forEach(e => e.classList.toggle('hist', e === tr));
   const h = $('#history');
-  const head = `<div class="sect"><h3>버전 히스토리 — ${relHtml(rel)}</h3><span class="hint">카드 우클릭 → 이 버전으로 되돌리기</span></div>`;
+  const head = `<div class="sect"><h3>버전 히스토리 — ${relHtml(rel)}</h3>` +
+    `<button id="uediffBtn" class="ghost small" title="선택한 스냅샷의 이 애셋 버전과 직전 버전을 언리얼 diff 창으로">⇄ UE 에서 diff 열기</button>` +
+    `<span class="hint">카드 우클릭 → 되돌리기 · UE 비교</span></div>`;
   h.innerHTML = head + '<p class="dim">불러오는 중…</p>';
   try {
     const {versions} = await api('/api/asset?rel=' + encodeURIComponent(rel));
@@ -787,12 +797,42 @@ async function showHistory(rel, tr, snapDiff) {
       const prev = i >= 0 ? versions.slice(i + 1).find(v => v.sha) : null;
       showMetaDiff($('#metadiff'), prev ? prev.sha : '', mod.new.sha);
     }
+    const prevOf = v => { const i = versions.indexOf(v); return i < 0 ? null : versions.slice(i + 1).find(x => x.sha); };
     h.querySelectorAll('.ver').forEach(card => card.oncontextmenu = e => {
       e.preventDefault();
       const vid = +card.dataset.id;
-      openMenu(e.clientX, e.clientY, [{ic:'↩', label: `이 버전(#${vid})으로 되돌리기: ${rel}`, run: () => restoreFlow(vid, [rel])}]);
+      const v = versions.find(x => x.id === vid);
+      const prev = v && v.sha ? prevOf(v) : null;
+      const items = [{ic:'↩', label: `이 버전(#${vid})으로 되돌리기: ${rel}`, run: () => restoreFlow(vid, [rel])}];
+      if (v && v.sha) {
+        items.push('-');
+        if (prev) items.push({ic:'⇄', label: `이 버전과 직전 버전(#${prev.id})을 UE 에서 비교`, run: () => uediffFlow(rel, prev.sha, v.sha)});
+        items.push({ic:'⇄', label: '이 버전과 현재 파일을 UE 에서 비교', run: () => uediffFlow(rel, v.sha, null)});
+      }
+      openMenu(e.clientX, e.clientY, items);
     });
+    const btn = h.querySelector('#uediffBtn');
+    if (btn) btn.onclick = () => {
+      const cur = versions.find(v => v.id === selected && v.sha) || versions.find(v => v.sha);
+      if (!cur) { toast('비교할 버전이 없습니다', true); return; }
+      const prev = prevOf(cur);
+      uediffFlow(rel, prev ? prev.sha : cur.sha, prev ? cur.sha : null);
+    };
   } catch (e) { h.innerHTML = head + `<div class="err">${esc(e.message)}</div>`; }
+}
+
+// ---- UE diff ----
+async function uediffFlow(rel, aSha, bSha) {
+  toast('언리얼 diff 창을 여는 중 — 에디터가 하나 더 뜨며 1분쯤 걸릴 수 있습니다');
+  const body = bSha ? {rel, a: aSha, b: bSha} : {rel, a: aSha};
+  try {
+    await api('/api/uediff', {method: 'POST', headers: JSONH, body: JSON.stringify(body)});
+  } catch (e) {
+    if (e.status === 409)
+      openModal(`<h3>언리얼 에디터를 찾지 못했습니다</h3><div class="err">${esc(e.message)}</div>` +
+        `<div class="btns"><button class="ghost" onclick="closeModal()">닫기</button></div>`);
+    else toast('오류: ' + e.message, true);
+  }
 }
 
 // ---- 올리기 ----

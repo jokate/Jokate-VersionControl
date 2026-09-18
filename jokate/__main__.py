@@ -148,6 +148,34 @@ def cmd_show(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_uediff(a: argparse.Namespace) -> int:
+    """스냅샷 두 개의 그 애셋 버전을 언리얼 diff 창으로 (id_b 생략 시 현재 파일과)."""
+    from . import store as storemod
+    from . import uediff as uediffmod
+    cfg = cfgmod.load(a.project)
+    st = storemod.Store(cfg)
+    rel = a.rel.replace("\\", "/").strip("/")
+    try:
+        shas = []
+        for sid in [a.id_a] + ([a.id_b] if a.id_b is not None else []):
+            e = st.tree(sid).get(rel)
+            if e is None:
+                print(f"스냅샷 #{sid} 에 {rel} 이(가) 없습니다", file=sys.stderr)
+                return 1
+            shas.append(e.sha)
+        r = uediffmod.open_diff(st, rel, shas[0], shas[1] if len(shas) > 1 else None)
+    except uediffmod.EditorNotFound as e:
+        print(e, file=sys.stderr)
+        return 1
+    except (KeyError, ValueError) as e:
+        print(e, file=sys.stderr)
+        return 1
+    finally:
+        st.close()
+    print(f"UE diff 실행 (pid {r['pid']})\n  좌: {r['left']}\n  우: {r['right']}")
+    return 0
+
+
 def cmd_restore(a: argparse.Namespace) -> int:
     from . import store as storemod
     cfg = cfgmod.load(a.project)
@@ -304,6 +332,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--apply", action="store_true", help="실제 적용 (기본은 드라이런)")
     s.add_argument("--discard-dirty", action="store_true", help="에디터에 저장 안 된 대상 패키지가 있어도 덮어씀")
     s.set_defaults(fn=cmd_restore)
+    s = sub.add_parser("uediff", help="두 버전을 언리얼 에디터 diff 창으로 열기")
+    s.add_argument("project"); s.add_argument("rel"); s.add_argument("id_a", type=int)
+    s.add_argument("id_b", type=int, nargs="?", help="생략하면 작업 트리의 현재 파일과 비교")
+    s.set_defaults(fn=cmd_uediff)
     s = sub.add_parser("squash", help="연속된 스냅샷을 하나로 묶고 이름 붙이기")
     s.add_argument("project"); s.add_argument("from_id", type=int); s.add_argument("to_id", type=int)
     s.add_argument("-m", "--message", help="묶은 스냅샷 이름")

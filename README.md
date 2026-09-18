@@ -168,6 +168,16 @@ python -m jokate daemon-stop <project>                                # 돌고 �
 - **한계**: 에디터가 꺼져 있거나 브릿지가 없으면 그 버전은 기록이 없다(UI 안내만 표시). 대상 패키지가 저장 안 된(dirty) 상태면 건너뛴다. 응답을 받은 뒤 파일 sha 가 달라졌으면 그 기록은 버린다. 두 버전 모두 사이드카가 있어야 비교되므로, 이 기능이 들어간 뒤 찍힌 스냅샷부터 의미 있다. DataTable 외 클래스는 아직 대상이 아니다
 - `gc` 는 어떤 스냅샷도 참조하지 않는 sha 의 사이드카도 함께 지운다
 
+## UE 에서 diff 열기
+
+- 블루프린트처럼 우리 UI 로는 못 보는 애셋은 **언리얼 에디터의 diff 창**으로 두 버전을 나란히 본다
+- 웹 UI: 버전 히스토리 헤더의 `⇄ UE 에서 diff 열기`(선택한 스냅샷 버전 ↔ 직전 버전), 카드 우클릭 → *직전 버전과 비교* / *현재 파일과 비교*
+- CLI: `python -m jokate uediff <project> <rel> <id_a> [<id_b>]` — `id_b` 를 빼면 작업 트리의 현재 파일과 비교
+- 동작: 두 버전을 `<project>/.jokate/tmp/diff/<이름>__<sha8>.<확장자>` 로 꺼낸 뒤
+  `UnrealEditor.exe <프로젝트.uproject> -diff <왼쪽> <오른쪽>` 을 창 분리로 실행한다(에디터가 하나 더 뜨고 1분쯤 걸린다). 임시 파일은 24시간 뒤 자동 정리
+- 에디터 경로: ① `.jokate/config.toml` 의 `[editor] exe` ② `.uproject` 의 `EngineAssociation` — 버전(`5.7`)이면 `HKLM\SOFTWARE\EpicGames\Unreal Engine\<버전>` 의 `InstalledDirectory`, GUID(소스 빌드)면 `HKCU\Software\Epic Games\Unreal Engine\Builds` 의 값
+- 못 찾으면 웹은 409 로 안내 모달을 띄운다 → `[editor] exe = "D:/UE_5.7/Engine/Binaries/Win64/UnrealEditor.exe"` 처럼 적어 주면 된다
+
 ## noise(리세이브) 판정
 
 - 에디터가 내용 변경 없이 다시 저장하면 SavedHash·엔진 버전·썸네일·오프셋 등 헤더만 바뀌어 sha 가 달라진다
