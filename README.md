@@ -23,12 +23,23 @@ python -m jokate init    <project>            # .jokate/config.toml 생성
 python -m jokate scan    <project>            # Content 스캔 → .jokate/scan.json
 python -m jokate table   <project> --tier authored [--cls Blueprint]
 python -m jokate inspect <file.uasset> [--thumb out.jpg]
+python -m jokate snap    <project> [-m "메시지"]  # authored 스냅샷. -m 있으면 label, 없으면 auto. 변경 없으면 생략(--force)
+python -m jokate log     <project>               # 스냅샷 목록
+python -m jokate show    <project> <id>          # 직전 스냅샷 대비 추가(A)/수정(M)/이동(R)/삭제(D) + 클래스별 집계
 ```
+
+## 스냅샷 저장소
+
+- `.jokate/store/objects/<sha[:2]>/<sha>` — 원본 그대로(압축 없음), 내용주소(blake2b-256). 같은 내용은 한 번만 저장
+- `.jokate/index.sqlite` — `snapshots(id, parent, kind, message, ts)`, `tree(snapshot_id, rel, sha, size, cls, deps)`
+- 변경 판단은 mtime 이 아니라 sha 비교. 이동은 "sha 동일 + 경로 변경"으로 잡는다
+- vendor 등급은 스냅샷에 포함하지 않는다
 
 ## 구성
 
 - `jokate/uasset.py` — 패키지 헤더 파서 (요약·이름·임포트·익스포트·썸네일). UE 4.11 ~ 5.7 검증
 - `jokate/scan.py` — 등급 분류 + 애셋 레코드(클래스·부모·의존성·해시)
+- `jokate/store.py` — 스냅샷 저장소 (내용주소 객체 + SQLite 인덱스, 트리 diff)
 - `jokate/config.py` — 프로젝트 설정
 - `jokate/__main__.py` — CLI
 
