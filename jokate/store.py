@@ -1008,6 +1008,32 @@ def diff_trees(old: dict[str, TreeEntry], new: dict[str, TreeEntry]) -> Diff:
     return d
 
 
+def deps_change(old: TreeEntry, new: TreeEntry) -> tuple[list[str], list[str]]:
+    """두 버전의 하드 참조 목록을 비교 → (추가된 패키지, 사라진 패키지). 둘 다 정렬된 목록."""
+    o, n = set(old.deps or []), set(new.deps or [])
+    return sorted(n - o), sorted(o - n)
+
+
+DEPS_MAX_LINES = 6
+
+
+def _dep_lines(old: TreeEntry, new: TreeEntry) -> list[str]:
+    """수정·이동 행 아래에 붙일 들여쓴 참조 변화 줄(최대 DEPS_MAX_LINES + 요약 1줄)."""
+    added, removed = deps_change(old, new)
+    items = [f"    + {p}" for p in added] + [f"    - {p}" for p in removed]
+    if len(items) > DEPS_MAX_LINES:
+        rest = len(items) - DEPS_MAX_LINES
+        items = items[:DEPS_MAX_LINES] + [f"    … 외 {rest}개"]
+    return items
+
+
+def dep_pkg(rel: str) -> str:
+    """Content 기준 상대경로 → /Game/... 패키지 경로."""
+    r = rel.replace("\\", "/").strip("/")
+    i = r.rfind(".")
+    return "/Game/" + (r[:i] if i > r.rfind("/") else r)
+
+
 def format_diff(d: Diff) -> str:
     lines = []
     for e in d.added:
@@ -1017,8 +1043,10 @@ def format_diff(d: Diff) -> str:
             lines.append(f"  M~ {n.rel}  [{n.cls or '?'}]  {o.size}→{n.size}B  (리세이브만)")
         else:
             lines.append(f"  M {n.rel}  [{n.cls or '?'}]  {o.size}→{n.size}B")
+        lines += _dep_lines(o, n)
     for o, n in d.moved:
         lines.append(f"  R {o.rel} → {n.rel}  [{n.cls or '?'}]")
+        lines += _dep_lines(o, n)
     for e in d.deleted:
         lines.append(f"  D {e.rel}  [{e.cls or '?'}]")
     if not lines:

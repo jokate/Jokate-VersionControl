@@ -7,10 +7,10 @@
 | 메서드·경로 | 요청 | 응답 | 오류 |
 |---|---|---|---|
 | `GET /` | — | `web_static/index.html` | 404 |
-| `GET /api/info` | — | 프로젝트명, 스냅샷 수, HEAD 추적 애셋 수, 객체 수·용량, 마지막 스냅샷 + `build`(서버 시작 시 코드 해시)·`build_disk`(현재 디스크, 5초 캐시)·`stale`(둘이 다름) + `pending`(아직 올리지 않은 변경 수)·`last_label`(마지막으로 올린 스냅샷). UI 는 5초마다 이걸 폴링해 타임라인·변경사항을 갱신한다 | — |
+| `GET /api/info` | — | 프로젝트명, 스냅샷 수, HEAD 추적 애셋 수, 객체 수·용량, 마지막 스냅샷 + `build`(서버 시작 시 코드 해시)·`build_disk`(현재 디스크, 5초 캐시)·`stale`(둘이 다름) + `pending`(아직 올리지 않은 변경 수)·`last_label`(마지막으로 올린 스냅샷)·`vendor`(동결 폴더 glob 목록, UI 가 참조 변화에 vendor 표시를 붙일 때 씀). UI 는 5초마다 이걸 폴링해 타임라인·변경사항을 갱신한다 | — |
 | `GET /api/log` | — | 스냅샷 목록 + 변경 건수·클래스별 집계. 사용자가 올린 스냅샷은 `uploaded:true` 이고 집계가 '이번에 올린 항목' 기준 | — |
-| `GET /api/snap/<id>` | 경로 id | `show` 와 동일한 diff (A/M/R/D + `by_class` + `all_noise`) | 404 없는 id |
-| `GET /api/asset` | `rel` | 애셋 버전 히스토리(스냅샷별 sha·size·변경여부, 최신순) | 400 `rel` 없음 |
+| `GET /api/snap/<id>` | 경로 id | `show` 와 동일한 diff (A/M/R/D + `by_class` + `all_noise`). `modified`·`moved` 항목마다 참조 변화 `deps_added`·`deps_removed`(정렬된 `/Game/...` 목록)·`deps_missing`(추가분 중 그 시점 트리에 없는 패키지) | 404 없는 id |
+| `GET /api/asset` | `rel` | 애셋 버전 히스토리(스냅샷별 sha·size·변경여부 + 직전 버전 대비 `deps_added`·`deps_removed`, 최신순) | 400 `rel` 없음 |
 | `GET /api/thumb` | `sha` 또는 `rel` | `image/jpeg`\|`image/png` 바이트 | 404 썸네일 없음·경로 탈출 |
 | `GET /api/search` | `q` | 애셋·클래스·메시지 부분일치(대소문자 무시) 스냅샷 + 일치 애셋 | — |
 | `GET /api/metadiff` | `a`, `b` (sha) | `{available, missing, kind, diff}` DataTable 값 diff | — |

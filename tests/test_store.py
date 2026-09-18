@@ -334,3 +334,28 @@ def test_cleanup_tmp_files_and_scan_ignores_tmp(project: Path) -> None:
     assert "Foo/A.uasset.jokate-tmp" not in rels and "Foo/A.uasset" in rels
     assert storemod.cleanup_tmp_files(cfg) == 1
     assert not old.exists() and new.exists()
+
+
+def test_deps_change_and_format() -> None:
+    """deps_change 는 정렬된 (추가, 제거), format_diff 는 수정 행 아래 들여쓴 줄."""
+    old = storemod.TreeEntry("Foo/A.uasset", "s1", 10, "Blueprint", ["/Game/B", "/Game/A"])
+    new = storemod.TreeEntry("Foo/A.uasset", "s2", 12, "Blueprint", ["/Game/A", "/Game/C"])
+    assert storemod.deps_change(old, new) == (["/Game/C"], ["/Game/B"])
+    assert storemod.deps_change(new, new) == ([], [])
+    d = storemod.Diff(modified=[(old, new)])
+    out = storemod.format_diff(d).splitlines()
+    assert out[0].startswith("  M Foo/A.uasset")
+    assert out[1] == "    + /Game/C" and out[2] == "    - /Game/B"
+    # 참조 변화가 없으면 아무 줄도 붙지 않는다
+    same = storemod.format_diff(storemod.Diff(modified=[(old, old)])).splitlines()
+    assert len(same) == 1 + 2   # 수정 1줄 + '클래스별:' 집계 2줄
+
+
+def test_format_diff_deps_cap() -> None:
+    """참조 변화가 6줄을 넘으면 '… 외 n개' 로 줄인다."""
+    old = storemod.TreeEntry("Foo/A.uasset", "s1", 1, "Blueprint", [])
+    new = storemod.TreeEntry("Foo/A.uasset", "s2", 1, "Blueprint", [f"/Game/D{i}" for i in range(9)])
+    lines = [x for x in storemod.format_diff(storemod.Diff(modified=[(old, new)])).splitlines()
+             if x.startswith("    ")]
+    assert len(lines) == 7 and lines[-1] == "    … 외 3개"
+    assert storemod.dep_pkg("Foo/A.uasset") == "/Game/Foo/A"

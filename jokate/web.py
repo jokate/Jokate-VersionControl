@@ -45,7 +45,7 @@ from . import meta as metamod
 from . import uediff as uediffmod
 from .config import Config
 from .store import (Diff, RestoreBlocked, Snapshot, SquashHasLabels, Store, TreeEntry,
-                    diff_trees, format_ts)
+                    dep_pkg, deps_change, diff_trees, format_ts)
 from .uasset import read_package
 
 _HEX = re.compile(r"[0-9a-fA-F]+")
@@ -100,11 +100,31 @@ def _snapshot(s: Snapshot) -> dict:
             "ts": s.ts, "time": format_ts(s.ts)}
 
 
-def _diff(d: Diff) -> dict:
+def _pair(o: TreeEntry, n: TreeEntry, known: set[str] | None) -> dict:
+    """modified·moved 한 쌍 + 참조 변화(추가/제거, 추가분 중 프로젝트에 없는 것)."""
+    added, removed = deps_change(o, n)
+    missing = [p for p in added if known is not None and p.startswith("/Game/") and p not in known]
+    return {"old": _entry(o), "new": _entry(n),
+            "deps_added": added, "deps_removed": removed, "deps_missing": missing}
+
+
+def _pkgs(rels) -> set[str]:
+    """rel 목록 → /Game/ 패키지 집합 (참조 대상이 프로젝트에 있는지 판정용)."""
+    return {dep_pkg(r) for r in rels}
+
+
+def _pkgs_after(tree: dict[str, TreeEntry], d: Diff) -> set[str]:
+    """tree 에 diff 를 적용한 뒤 남는 패키지 집합."""
+    rels = set(tree) - {e.rel for e in d.deleted} - {o.rel for o, _ in d.moved}
+    rels |= {e.rel for e in d.added} | {n.rel for _, n in d.moved}
+    return _pkgs(rels)
+
+
+def _diff(d: Diff, known: set[str] | None = None) -> dict:
     return {
         "added": [_entry(e) for e in d.added],
-        "modified": [{"old": _entry(o), "new": _entry(n)} for o, n in d.modified],
-        "moved": [{"old": _entry(o), "new": _entry(n)} for o, n in d.moved],
+        "modified": [_pair(o, n, known) for o, n in d.modified],
+        "moved": [_pair(o, n, known) for o, n in d.moved],
         "deleted": [_entry(e) for e in d.deleted],
         "counts": _counts(d),
         "by_class": {cls: dict(c) for cls, c in sorted(d.by_class().items())},
@@ -133,6 +153,7 @@ def api_info(store: Store) -> dict:
     return {"project": store.cfg.root.name, "snapshots": n_snaps, "assets": n_assets,
             "objects": objects, "store_bytes": size, "last": _snapshot(head) if head else None,
             "pending": pending, "last_label": last_label,
+            "vendor": list(store.cfg.vendor),
             "build": BUILD_ID, "build_disk": disk, "stale": disk != BUILD_ID}
 
 
@@ -197,30 +218,37 @@ def api_search(store: Store, q: str, limit: int = 200) -> dict:
 
 def api_snap(store: Store, sid: int) -> dict:
     s, d = store.show(sid)  # KeyError → 404 (올린 스냅샷이면 '이번에 올린 것')
-    return {"snapshot": _snapshot(s), "diff": _diff(d),
+    return {"snapshot": _snapshot(s), "diff": _diff(d, _pkgs(store.tree(sid))),
             "uploaded": store.uploaded_diff(sid) is not None}
 
 
 def api_asset(store: Store, rel: str) -> dict:
     rel = rel.replace("\\", "/").strip("/")
     rows = store.db.execute(
-        "SELECT s.id, s.kind, s.message, s.ts, t.sha, t.size, t.cls "
+        "SELECT s.id, s.kind, s.message, s.ts, t.sha, t.size, t.cls, t.deps "
         "FROM snapshots s LEFT JOIN tree t ON t.snapshot_id = s.id AND t.rel = ? "
         "ORDER BY s.id ASC", (rel,)).fetchall()
     versions = []
     prev_sha: str | None = None
-    for sid, kind, message, ts, sha, size, cls in rows:
+    prev_deps: list[str] = []
+    for sid, kind, message, ts, sha, size, cls, deps in rows:
         present = sha is not None
+        cur_deps = json.loads(deps) if deps else []
         if present:
             state = "added" if prev_sha is None else ("modified" if sha != prev_sha else "same")
         else:
             state = "deleted" if prev_sha is not None else "absent"
         if state != "absent":
+            # 직전 버전 대비 참조 변화 (삭제된 버전은 그 시점 참조가 통째로 사라진 것)
+            d_add, d_rem = deps_change(TreeEntry(rel, "", 0, "", prev_deps),
+                                       TreeEntry(rel, "", 0, "", cur_deps))
             versions.append({"id": sid, "kind": kind, "message": message, "ts": ts, "time": format_ts(ts),
                              "sha": sha, "size": size, "cls": cls or "?", "state": state,
                              "changed": state in ("added", "modified", "deleted"),
+                             "deps_added": d_add, "deps_removed": d_rem,
                              "has_meta": bool(sha) and metamod.has_meta(store, sha)})
         prev_sha = sha
+        prev_deps = cur_deps
     versions.reverse()
     return {"rel": rel, "versions": versions}
 
@@ -228,14 +256,16 @@ def api_asset(store: Store, rel: str) -> dict:
 def api_restore(store: Store, sid: int, assets: list[str] | None = None) -> dict:
     plan = store.plan_restore(sid, assets or None)  # KeyError → 404
     return {"snapshot": _snapshot(plan.snapshot), "assets": assets or [],
-            "diff": _diff(plan.diff),
+            "diff": _diff(plan.diff, _pkgs(plan.result)),
             "broken": [{"rel": r, "dep": d} for r, d in plan.broken],
             "dependents": [{"rel": r, "dep": d} for r, d in plan.dependents]}
 
 
 def api_status(store: Store) -> dict:
     """baseline(마지막으로 올린 상태) 대비 아직 올리지 않은 변경."""
-    return {"diff": _diff(store.status())}
+    base = store.baseline()
+    d = store.status()
+    return {"diff": _diff(d, _pkgs_after(base, d))}
 
 
 def api_snap_create(store: Store, message: str, only: list[str] | None = None) -> dict:
@@ -283,7 +313,7 @@ def api_revert(store: Store, assets: list[str] | None = None) -> dict:
     """baseline(마지막으로 올린 상태)으로 되돌릴 계획(드라이런). /api/restore 와 같은 형태."""
     plan = store.plan_revert_to_baseline(assets or None)
     return {"snapshot": _snapshot(plan.snapshot), "assets": assets or [],
-            "diff": _diff(plan.diff),
+            "diff": _diff(plan.diff, _pkgs(plan.result)),
             "broken": [{"rel": r, "dep": d} for r, d in plan.broken],
             "dependents": [{"rel": r, "dep": d} for r, d in plan.dependents]}
 

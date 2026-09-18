@@ -157,6 +157,20 @@
   .pill.paused { color:var(--m); background:rgba(255,181,71,.14); }
   .pill.act { cursor:pointer; user-select:none; }
   .pill.act:hover { filter:brightness(1.15); }
+  /* ---------- 참조 변화 ---------- */
+  .pill.deps { color:var(--acc2); background:rgba(108,140,255,.12); margin-left:6px; }
+  tr.depsrow > td { padding:2px 10px 8px; border-bottom:1px solid var(--line); }
+  .deplist { display:flex; flex-direction:column; gap:2px; padding:2px 0 2px 26px; }
+  .dep { font-size:12px; display:flex; align-items:center; gap:6px; }
+  .dep .sign { font-weight:700; width:10px; text-align:center; }
+  .dep.add .sign { color:var(--a); }
+  .dep.del .sign { color:var(--d); }
+  .dep.del .rel { text-decoration:line-through; color:var(--fg2); }
+  .dep.missing .rel { color:var(--d); }
+  .dep .vtag { font-size:10px; font-weight:600; padding:0 6px; border-radius:999px;
+               background:rgba(216,194,90,.14); color:var(--n); }
+  .dep .vtag.miss { background:rgba(255,93,108,.14); color:var(--d); }
+  .ver .deplist { padding-left:0; margin-top:4px; }
   #dead { position:fixed; inset:0; z-index:200; display:grid; place-items:center; background:rgba(11,14,20,.92);
           color:var(--fg2); font-size:18px; font-weight:600; text-align:center; }
   .badge { display:inline-block; font-size:11px; padding:0 8px; border-radius:999px; margin:2px 4px 0 0; font-weight:500;
@@ -378,6 +392,62 @@ const hue = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCod
 const fmtB = n => n == null ? '' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : n + ' B';
 const relHtml = rel => { const i = rel.lastIndexOf('/'); return i < 0 ? `<span class="rel">${esc(rel)}</span>` : `<span class="rel"><span class="dir">${esc(rel.slice(0, i + 1))}</span>${esc(rel.slice(i + 1))}</span>`; };
 
+// ---- 참조 변화(deps) ----
+let VENDOR = [];   // /api/info 의 vendor 폴더 glob
+const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function isVendorPkg(pkg) {
+  const m = /^\/Game\/([^/]+)\//.exec(pkg || '');
+  if (!m) return false;
+  return VENDOR.some(p => new RegExp('^' + p.split('*').map(reEsc).join('.*') + '$').test(m[1]));
+}
+function depsPill(x) {
+  const a = (x && x.deps_added) || [], r = (x && x.deps_removed) || [];
+  if (!a.length && !r.length) return '';
+  const t = [a.length ? '+' + a.length : '', r.length ? '−' + r.length : ''].filter(Boolean).join(' ');
+  return `<span class="pill deps act" title="이 애셋이 참조하는 애셋의 변화 (클릭하면 펼침)">참조 ${t}</span>`;
+}
+function depsHtml(x) {
+  const a = (x && x.deps_added) || [], r = (x && x.deps_removed) || [];
+  if (!a.length && !r.length) return '';
+  const miss = new Set((x && x.deps_missing) || []);
+  const one = (p, k) => `<div class="dep ${k}${miss.has(p) ? ' missing' : ''}"><span class="sign">${k === 'add' ? '+' : '−'}</span>${relHtml(p)}` +
+    (isVendorPkg(p) ? '<span class="vtag">vendor</span>' : '') +
+    (miss.has(p) ? '<span class="vtag miss">없는 애셋</span>' : '') + '</div>';
+  return '<div class="deplist">' + a.map(p => one(p, 'add')).join('') + r.map(p => one(p, 'del')).join('') + '</div>';
+}
+// 필/행에 대응하는 펼침 영역 (표는 다음 tr.depsrow, 버전 카드는 카드 안 .deplist)
+function depsTargetOf(el) {
+  const tr = el.closest('tr');
+  if (tr) {
+    const nx = tr.nextElementSibling;
+    return nx && nx.classList.contains('depsrow') ? nx : null;
+  }
+  const card = el.closest('.ver');
+  return card ? card.querySelector('.deplist') : null;
+}
+function depsShow(el, on) { const t = depsTargetOf(el); if (t && !t.dataset.pin) t.hidden = !on; }
+function depsToggle(el) {
+  const t = depsTargetOf(el);
+  if (!t) return;
+  if (t.dataset.pin) { delete t.dataset.pin; t.hidden = true; } else { t.dataset.pin = '1'; t.hidden = false; }
+}
+document.addEventListener('click', e => {
+  const p = e.target.closest && e.target.closest('.pill.deps');
+  if (p) { e.stopPropagation(); e.preventDefault(); depsToggle(p); }
+}, true);
+document.addEventListener('click', e => {
+  const tr = e.target.closest && e.target.closest('tr');
+  if (tr && !e.target.closest('.pill.deps')) depsToggle(tr.querySelector('.pill.deps') || tr);
+});
+document.addEventListener('mouseover', e => {
+  const p = e.target.closest && e.target.closest('.pill.deps');
+  if (p) depsShow(p, true);
+});
+document.addEventListener('mouseout', e => {
+  const p = e.target.closest && e.target.closest('.pill.deps');
+  if (p && !p.contains(e.relatedTarget)) depsShow(p, false);
+});
+
 async function api(path, opt) {
   const r = await fetch(path, opt);
   const j = await r.json().catch(() => ({error: r.statusText}));
@@ -457,6 +527,7 @@ function applyInfo(i) {
     $('#stAssets').innerHTML = `${i.assets}<small>authored</small>`;
     $('#stStore').innerHTML = `${fmtB(i.store_bytes)}<small>${i.objects}개</small>`;
     $('#stLast').innerHTML = i.last ? `<span style="font-size:15px">${esc(i.last.time.slice(5, 16))}</span><small>#${i.last.id}</small>` : '없음';
+    if (Array.isArray(i.vendor)) VENDOR = i.vendor;
     $('#baseRef').textContent = i.last_label ? `마지막으로 올린 #${i.last_label.id} 이후` : '아직 올린 적 없음';
     if (typeof applyFold === 'function') applyFold();   // 접힌 상태면 한 줄 요약 갱신
 }
@@ -798,11 +869,11 @@ async function loadStatus() {
 
 function rows(d) {
   const out = [];
-  for (const x of d.modified) if (!x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${fmtB(x.old.size)} → ${fmtB(x.new.size)}`, false, x.new.sha]);
-  for (const x of d.added) out.push(['A', x.rel, x.cls, fmtB(x.size), false, x.sha]);
-  for (const x of d.moved) out.push(['R', x.new.rel, x.new.cls, `← ${x.old.rel}`, false, x.new.sha]);
-  for (const x of d.deleted) out.push(['D', x.rel, x.cls, fmtB(x.size), false, x.sha]);
-  for (const x of d.modified) if (x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${fmtB(x.new.size)} · 리세이브만`, true, x.new.sha]);
+  for (const x of d.modified) if (!x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${fmtB(x.old.size)} → ${fmtB(x.new.size)}`, false, x.new.sha, x]);
+  for (const x of d.added) out.push(['A', x.rel, x.cls, fmtB(x.size), false, x.sha, null]);
+  for (const x of d.moved) out.push(['R', x.new.rel, x.new.cls, `← ${x.old.rel}`, false, x.new.sha, x]);
+  for (const x of d.deleted) out.push(['D', x.rel, x.cls, fmtB(x.size), false, x.sha, null]);
+  for (const x of d.modified) if (x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${fmtB(x.new.size)} · 리세이브만`, true, x.new.sha, x]);
   return out;
 }
 // thumbBy: 'sha' = store 객체(스냅샷 상세·모달), 'rel' = 작업 트리 현재 파일(변경사항 패널, 삭제 행은 sha)
@@ -815,10 +886,14 @@ function diffTable(d, listName, withClass = true, thumbBy = 'sha') {
   if (!rs.length) return '<p class="dim">변경 없음</p>';
   let h = '<table><tr>' + (listName ? '<th class="cb"><input type="checkbox" class="selall" title="전체 선택/해제"></th>' : '') +
     `<th class="tn"></th><th></th><th>애셋${listName ? ' <span class="selcount"></span>' : ''}</th><th>클래스</th><th></th></tr>`;
-  for (const [k, rel, cls, extra, noise, sha] of rs)
+  const ncol = (listName ? 1 : 0) + 5;
+  for (const [k, rel, cls, extra, noise, sha, dx] of rs) {
+    const dl = depsHtml(dx);
     h += `<tr class="${listName ? 'row' : ''}${noise ? ' noise' : ''}" data-rel="${esc(rel)}">` + (listName ? `<td class="cb"><input type="checkbox" tabindex="-1" ${sel[listName].has(rel) ? 'checked' : ''}></td>` : '') +
       `<td class="tn">${thumbHtml(cls, thumbSrc(thumbBy, k, rel, sha))}</td>` +
-      `<td class="k ${k}" title="${noise ? '리세이브만(헤더만 변경)' : KIND[{A:'added',M:'modified',R:'moved',D:'deleted'}[k]]}"><span>${k}${noise ? '~' : ''}</span></td><td>${relHtml(rel)}</td><td>${clsBadge(cls)}</td><td class="dim">${esc(extra)}</td></tr>`;
+      `<td class="k ${k}" title="${noise ? '리세이브만(헤더만 변경)' : KIND[{A:'added',M:'modified',R:'moved',D:'deleted'}[k]]}"><span>${k}${noise ? '~' : ''}</span></td><td>${relHtml(rel)}</td><td>${clsBadge(cls)}</td><td class="dim">${esc(extra)}${depsPill(dx)}</td></tr>`;
+    if (dl) h += `<tr class="depsrow" hidden><td colspan="${ncol}">${dl}</td></tr>`;
+  }
   h += '</table>';
   if (d.counts && d.counts.resave) h += `<div class="hint">리세이브만 ${d.counts.resave}${d.all_noise ? ' · 이 변경은 전부 리세이브만' : ''}</div>`;
   const bc = Object.keys(d.by_class);
@@ -916,7 +991,8 @@ async function showHistory(rel, tr, snapDiff) {
       html += `<div class="ver ${v.changed ? 'changed' : ''}" data-id="${v.id}"><div class="th">${thumb}<span class="tag pill ${v.state === 'same' ? '' : v.state}">${esc(KIND[v.state] || '동일')}</span></div>
         <div><span class="vid">#${v.id}</span> <span class="dim">${esc(v.time.slice(5, 16))}</span></div>
         <div class="sha">${fmtB(v.size)} · ${v.sha ? v.sha.slice(0, 8) : ''}${v.has_meta ? ' <span class="meta">내용 기록</span>' : ''}</div>
-        <div class="vmsg" title="${esc(v.message)}">${esc(v.message || (v.kind === 'auto' ? '자동 저장' : ''))}</div></div>`;
+        <div class="vmsg" title="${esc(v.message)}">${esc(v.message || (v.kind === 'auto' ? '자동 저장' : ''))}</div>
+        ${depsPill(v)}${depsHtml(v) ? depsHtml(v).replace('<div class="deplist"', '<div class="deplist" hidden') : ''}</div>`;
     }
     h.innerHTML = '<div id="metadiff"></div>' + html + '</div>';
     // 이 스냅샷에서 DataTable 이 수정된 행이면 직전 버전과 내용 비교

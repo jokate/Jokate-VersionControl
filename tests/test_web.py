@@ -263,3 +263,33 @@ def test_api_daemon_post_restart() -> None:
     assert calls == ["restart"]
     with pytest.raises(web.DaemonUnavailable):
         web.api_daemon_post(None, "restart")
+
+
+def _set_deps(st: storemod.Store, sid: int, rel: str, deps: str) -> None:
+    st.db.execute("UPDATE tree SET deps=? WHERE snapshot_id=? AND rel=?", (deps, sid, rel))
+    st.db.commit()
+
+
+def test_diff_deps_change(st: storemod.Store) -> None:
+    """_diff 의 modified 항목에 참조 변화가 직렬화되고, 없는 대상은 deps_missing."""
+    _set_deps(st, 1, "Foo/A.uasset", '["/Game/Foo/C"]')
+    _set_deps(st, 2, "Foo/A.uasset", '["/Game/Foo/B", "/Game/Gone/X"]')
+    m = web.api_snap(st, 2)["diff"]["modified"][0]
+    assert m["deps_added"] == ["/Game/Foo/B", "/Game/Gone/X"]
+    assert m["deps_removed"] == ["/Game/Foo/C"]
+    assert m["deps_missing"] == ["/Game/Gone/X"]     # 스냅샷 트리에 없는 패키지
+    mv = web.api_snap(st, 2)["diff"]["moved"][0]
+    assert mv["deps_added"] == [] and mv["deps_removed"] == []
+
+
+def test_api_asset_deps(st: storemod.Store) -> None:
+    """버전 히스토리의 각 버전에 직전 버전 대비 참조 변화가 붙는다."""
+    _set_deps(st, 1, "Foo/A.uasset", '["/Game/Foo/C"]')
+    _set_deps(st, 2, "Foo/A.uasset", '["/Game/Foo/B"]')
+    v = web.api_asset(st, "Foo/A.uasset")["versions"]
+    assert v[0]["id"] == 2 and v[0]["deps_added"] == ["/Game/Foo/B"] and v[0]["deps_removed"] == ["/Game/Foo/C"]
+    assert v[1]["deps_added"] == ["/Game/Foo/C"] and v[1]["deps_removed"] == []
+
+
+def test_api_info_vendor(st: storemod.Store) -> None:
+    assert isinstance(web.api_info(st)["vendor"], list)
