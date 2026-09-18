@@ -8,6 +8,7 @@ jokate CLI
   python -m jokate snap <project> [-m 메시지]      # authored 스냅샷 (-m 없으면 auto)
   python -m jokate log <project>
   python -m jokate show <project> <id>             # 직전 스냅샷 대비 변경
+  python -m jokate restore <project> <id> [--asset rel ...] [--apply]   # 롤백 (기본 드라이런)
 """
 from __future__ import annotations
 
@@ -117,6 +118,33 @@ def cmd_show(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_restore(a: argparse.Namespace) -> int:
+    from . import store as storemod
+    cfg = cfgmod.load(a.project)
+    st = storemod.Store(cfg)
+    try:
+        plan = st.plan_restore(a.id, a.asset or None)
+    except KeyError as e:
+        print(e, file=sys.stderr)
+        return 1
+    print(storemod.format_restore(plan))
+    if not a.apply:
+        print("(드라이런 — 적용하려면 --apply)")
+        return 0
+    if storemod.editor_running():
+        print("UnrealEditor.exe 가 실행 중이다 — 에디터를 닫고 다시 실행", file=sys.stderr)
+        return 2
+    t0 = time.time()
+    try:
+        r = st.apply_restore(plan, check_editor=False)
+    except (RuntimeError, FileNotFoundError) as e:
+        print(e, file=sys.stderr)
+        return 2
+    print(f"안전 스냅샷 #{r.safety.id} ({r.safety.message}) → 파일 {r.written}개 씀, {r.deleted}개 삭제"
+          f" → 스냅샷 #{r.result.id} ({r.result.message})  ({time.time() - t0:.1f}s)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="jokate")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -131,6 +159,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--force", action="store_true", help="변경 없어도 스냅샷 생성"); s.set_defaults(fn=cmd_snap)
     s = sub.add_parser("log"); s.add_argument("project"); s.set_defaults(fn=cmd_log)
     s = sub.add_parser("show"); s.add_argument("project"); s.add_argument("id", type=int); s.set_defaults(fn=cmd_show)
+    s = sub.add_parser("restore"); s.add_argument("project"); s.add_argument("id", type=int)
+    s.add_argument("--asset", action="append", metavar="REL", help="이 애셋만 되돌림 (Content 기준 상대경로, 반복 가능)")
+    s.add_argument("--apply", action="store_true", help="실제 적용 (기본은 드라이런)")
+    s.set_defaults(fn=cmd_restore)
 
     a = ap.parse_args(argv)
     return a.fn(a)

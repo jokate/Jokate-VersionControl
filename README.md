@@ -26,7 +26,17 @@ python -m jokate inspect <file.uasset> [--thumb out.jpg]
 python -m jokate snap    <project> [-m "메시지"]  # authored 스냅샷. -m 있으면 label, 없으면 auto. 변경 없으면 생략(--force)
 python -m jokate log     <project>               # 스냅샷 목록
 python -m jokate show    <project> <id>          # 직전 스냅샷 대비 추가(A)/수정(M)/이동(R)/삭제(D) + 클래스별 집계
+python -m jokate restore <project> <id> [--asset rel ...] [--apply]   # 롤백. 기본 드라이런, --apply 로 적용
 ```
+
+## 롤백 (restore)
+
+- 기본은 드라이런: 되돌릴 애셋(M 수정 되돌림 / A 부활 / R 이동 / D 삭제) 목록 + 클래스별 집계 + 참조 검산만 출력. 아무것도 바꾸지 않는다
+- `--asset rel` 을 주면 그 애셋들만 스냅샷 시점으로, 나머지는 현재 상태 유지 (반복 가능)
+- 참조 검산: 결과 트리 각 애셋의 `/Game/` 의존성이 결과 트리·vendor·현재 디스크 어디에도 없으면 "깨질 참조", 롤백으로 사라지는 애셋을 참조하는 authored 애셋은 별도 경고
+- `--apply` 순서: ① auto 스냅샷 `롤백 직전 #<id>` (안전망, 변경 없어도 생성) ② 객체를 `Content/` 로 복사(tmp→replace) ③ 결과 트리에 없는 authored 파일 삭제 ④ label 스냅샷 `롤백: #<id>`
+- `UnrealEditor.exe` 가 실행 중이면 `--apply` 를 거부한다 (에디터를 닫고 다시 실행)
+- 롤백도 되돌릴 수 있다: `restore <project> <안전 스냅샷 id> --apply`
 
 ## 스냅샷 저장소
 
@@ -47,5 +57,5 @@ python -m jokate show    <project> <id>          # 직전 스냅샷 대비 추�
 
 1. ~~헤더 파서 + 스캐너~~
 2. 스냅샷 저장소 (내용주소 + SQLite) + 타임라인 웹 UI
-3. 롤백 (방금 저장 취소 → 애셋 히스토리 → 스냅샷 취소 → 시점 전체 복귀) + UE Python 브릿지
+3. ~~롤백 (시점 전체 복귀 / 애셋 단위, 드라이런 + 안전 스냅샷, 참조 검산)~~ → 애셋 히스토리, UE Python 브릿지
 4. 리세이브 noise 필터, rename 추적, 참조 검산

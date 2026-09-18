@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+import subprocess
+import sys
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -170,8 +172,168 @@ class Store:
             raise KeyError(f"snapshot {sid} 없음")
         return s, diff_trees(self.tree(s.parent), self.tree(s.id))
 
+    # ---- restore ----
+    def plan_restore(self, sid: int, assets: list[str] | None = None) -> "RestorePlan":
+        """스냅샷 <sid> 로 되돌릴 계획(드라이런). assets 가 있으면 그 rel 들만 대상, 나머지는 현재 유지."""
+        s = self.get(sid)
+        if s is None:
+            raise KeyError(f"snapshot {sid} 없음")
+        target = self.tree(sid)
+        recs = self.scan_authored()
+        current = {r.rel: TreeEntry(r.rel, r.sha, r.size, r.cls, r.deps) for r in recs}
+        if assets:
+            result = dict(current)
+            for a in assets:
+                rel = a.replace("\\", "/").strip("/")
+                if rel not in target and rel not in current:
+                    raise KeyError(f"{rel}: 스냅샷 #{sid} 에도 현재 트리에도 없음")
+                if rel in target:
+                    result[rel] = target[rel]
+                else:
+                    result.pop(rel, None)
+        else:
+            result = dict(target)
+        d = diff_trees(current, result)
+        plan = RestorePlan(snapshot=s, current=current, result=result, diff=d)
+        self._check_refs(plan)
+        return plan
+
+    def _check_refs(self, plan: "RestorePlan") -> None:
+        """결과 트리 참조 검산. /Game/ 의존성이 결과 트리·vendor·현재 디스크 어디에도 없으면 경고."""
+        vanishing_rels = {e.rel for e in plan.diff.deleted} | {o.rel for o, _ in plan.diff.moved}
+        result_pkgs = {_pkg_of(rel): rel for rel in plan.result}
+        vanishing_pkgs = {_pkg_of(rel) for rel in vanishing_rels}
+        cache: dict[str, bool] = {}
+
+        def resolvable(pkg: str) -> bool:
+            if pkg in cache:
+                return cache[pkg]
+            ok = pkg in result_pkgs
+            if not ok:
+                sub = pkg[len("/Game/"):]
+                for ext in ASSET_EXTS:
+                    p = self.cfg.content / (sub + ext)
+                    if not p.exists():
+                        continue
+                    rel = p.relative_to(self.cfg.content)
+                    tier = self.cfg.tier_of(rel)
+                    if tier == "vendor" or (tier == "authored" and rel.as_posix() not in vanishing_rels):
+                        ok = True
+                        break
+            cache[pkg] = ok
+            return ok
+
+        for rel in sorted(plan.result):
+            e = plan.result[rel]
+            for dep in e.deps:
+                if not dep.startswith("/Game/"):
+                    continue
+                if dep in vanishing_pkgs and dep not in result_pkgs:
+                    plan.dependents.append((rel, dep))
+                elif not resolvable(dep):
+                    plan.broken.append((rel, dep))
+
+    def apply_restore(self, plan: "RestorePlan", *, check_editor: bool = True) -> "RestoreResult":
+        """계획 적용: 안전 스냅샷 → 파일 복사/삭제 → 결과 스냅샷."""
+        if check_editor and editor_running():
+            raise RuntimeError("UnrealEditor.exe 가 실행 중이다 — 에디터를 닫고 다시 실행")
+        sid = plan.snapshot.id
+        # 객체가 모두 있는지 먼저 확인
+        for e in plan.result.values():
+            if not self.object_path(e.sha).exists():
+                raise FileNotFoundError(f"객체 없음: {e.rel} ({e.sha[:12]})")
+        safety, _, _ = self.snap(f"롤백 직전 #{sid}", kind="auto", force=True)
+        written = 0
+        for rel, e in plan.result.items():
+            cur = plan.current.get(rel)
+            if cur is not None and cur.sha == e.sha:
+                continue
+            dst = self.cfg.content / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dst.with_name(dst.name + ".jokate-tmp")
+            shutil.copyfile(self.object_path(e.sha), tmp)
+            tmp.replace(dst)
+            written += 1
+        deleted = 0
+        for rel in plan.current:
+            if rel not in plan.result:
+                p = self.cfg.content / rel
+                if p.exists():
+                    p.unlink()
+                    deleted += 1
+        result, _, _ = self.snap(f"롤백: #{sid}", kind="label", force=True)
+        return RestoreResult(safety=safety, result=result, written=written, deleted=deleted)
+
     def close(self) -> None:
         self.db.close()
+
+
+@dataclass
+class RestorePlan:
+    snapshot: Snapshot
+    current: dict[str, TreeEntry]
+    result: dict[str, TreeEntry]
+    diff: Diff                                   # 현재 → 결과 (added=부활, modified=수정 되돌림, deleted=삭제, moved=이동)
+    broken: list[tuple[str, str]] = field(default_factory=list)      # (rel, dep) 결과 트리·vendor·디스크 어디에도 없는 참조
+    dependents: list[tuple[str, str]] = field(default_factory=list)  # (rel, dep) 롤백으로 사라지는 애셋을 참조
+
+
+@dataclass
+class RestoreResult:
+    safety: Snapshot
+    result: Snapshot
+    written: int
+    deleted: int
+
+
+def _pkg_of(rel: str) -> str:
+    return "/Game/" + rel.rsplit(".", 1)[0]
+
+
+def editor_running() -> bool:
+    """tasklist 에 UnrealEditor.exe 가 있으면 True. Windows 가 아니면 False."""
+    if sys.platform != "win32":
+        return False
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq UnrealEditor.exe", "/NH"],
+                             capture_output=True, text=True, timeout=15).stdout
+    except Exception:
+        return False
+    return "unrealeditor.exe" in out.lower()
+
+
+def format_restore(plan: RestorePlan) -> str:
+    s = plan.snapshot
+    lines = [f"restore → snapshot #{s.id} ({s.kind}) {format_ts(s.ts)}  {s.message}".rstrip()]
+    d = plan.diff
+    for o, n in d.modified:
+        lines.append(f"  M {n.rel}  [{n.cls or '?'}]  {o.size}→{n.size}B  (수정 되돌림)")
+    for e in d.added:
+        lines.append(f"  A {e.rel}  [{e.cls or '?'}]  (부활)")
+    for o, n in d.moved:
+        lines.append(f"  R {o.rel} → {n.rel}  [{n.cls or '?'}]  (이동)")
+    for e in d.deleted:
+        lines.append(f"  D {e.rel}  [{e.cls or '?'}]  (삭제)")
+    if d.empty:
+        lines.append("  (변경 없음 — 이미 해당 상태)")
+    bc = d.by_class()
+    if bc:
+        lines.append("클래스별:")
+        for cls in sorted(bc):
+            c = bc[cls]
+            parts = [f"{k} {c[k]}" for k in ("modified", "added", "moved", "deleted") if c[k]]
+            lines.append(f"  {cls:<24} " + ", ".join(parts))
+    if plan.dependents:
+        lines.append(f"경고: 롤백으로 사라지는 애셋을 참조 ({len(plan.dependents)}):")
+        for rel, dep in plan.dependents:
+            lines.append(f"  ! {rel} → {dep}")
+    if plan.broken:
+        lines.append(f"경고: 깨질 참조 ({len(plan.broken)}):")
+        for rel, dep in plan.broken:
+            lines.append(f"  ! {rel} → {dep}")
+    if not plan.dependents and not plan.broken:
+        lines.append("참조 검산: 이상 없음")
+    return "\n".join(lines)
 
 
 def diff_trees(old: dict[str, TreeEntry], new: dict[str, TreeEntry]) -> Diff:
