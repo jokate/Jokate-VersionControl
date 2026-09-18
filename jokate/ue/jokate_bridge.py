@@ -332,6 +332,45 @@ def _op_dirty(packages, args):
     return {"ok": True, "dirty": _dirty_names(packages)}
 
 
+def _close_asset_editors(pkg_name):
+    """그 패키지의 애셋이 애셋 에디터 탭에 열려 있으면 닫는다. 실패해도 무시."""
+    try:
+        asset = unreal.EditorAssetLibrary.load_asset(pkg_name)
+    except Exception:  # noqa: BLE001
+        asset = None
+    if asset is None:
+        return
+    try:
+        unreal.get_editor_subsystem(unreal.AssetEditorSubsystem).close_all_editors_for_asset(asset)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _op_release(packages, args):
+    """로드된 패키지를 unload 해서 .uasset 파일 잠금을 푼다 (그래야 밖에서 덮어쓸 수 있다)."""
+    released, not_loaded, failed = [], [], {}
+    for name in packages:
+        try:
+            pkg = unreal.find_package(name)
+        except Exception:  # noqa: BLE001
+            pkg = None
+        if pkg is None:
+            not_loaded.append(name)
+            continue
+        _close_asset_editors(name)
+        try:
+            r = unreal.EditorLoadingAndSavingUtils.unload_packages([pkg])
+        except Exception as e:  # noqa: BLE001
+            failed[name] = "%s: %s" % (type(e).__name__, e)
+            continue
+        ok, text = (r[0], r[1]) if isinstance(r, (tuple, list)) and len(r) >= 2 else (r, "")
+        if ok:
+            released.append(name)
+        else:
+            failed[name] = str(text) or "unload_packages 실패"
+    return {"ok": not failed, "released": released, "not_loaded": not_loaded, "failed": failed}
+
+
 def _op_reload(packages, args):
     if not args.get("discard_dirty"):
         dirty = _dirty_names(packages)
@@ -520,7 +559,7 @@ def _op_diff(packages, args):
     return {"ok": True, "strategy": strategy}
 
 
-_OPS = {"dirty": _op_dirty, "reload": _op_reload, "export_meta": _op_export_meta, "diff": _op_diff}
+_OPS = {"dirty": _op_dirty, "release": _op_release, "reload": _op_reload, "export_meta": _op_export_meta, "diff": _op_diff}
 
 
 def _handle_request():

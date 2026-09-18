@@ -127,8 +127,49 @@ def test_apply_restore_dirty_blocks(project: Path, monkeypatch: pytest.MonkeyPat
         r = st.apply_restore(st.plan_restore(1), discard_dirty=True)
     assert (project / "Content" / "Foo" / "A.uasset").read_bytes() == b"AAAA-v1"
     assert r.written == 1 and r.reloaded == 1
-    assert [c[0] for c in ed.calls] == ["dirty", "dirty", "reload"]
+    assert [c[0] for c in ed.calls] == ["dirty", "dirty", "release", "reload"]
     assert ed.calls[-1] == ("reload", ["/Game/Foo/A"], {"discard_dirty": True})
+
+
+def test_apply_restore_release_order(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """dirty → release → (쓰기) → reload 순서. release 는 쓰기 전에 와야 한다."""
+    monkeypatch.setattr(storemod, "editor_running", lambda: True)
+    st = _two_snapshots(project)
+    seen: list[str] = []
+    asset = project / "Content" / "Foo" / "A.uasset"
+
+    def handler(op, pkgs, args):
+        seen.append(f"{op}:{asset.read_bytes().decode()}")
+        if op == "dirty":
+            return {"ok": True, "dirty": []}
+        if op == "release":
+            return {"ok": True, "released": list(pkgs), "not_loaded": [], "failed": {}}
+        return {"ok": True, "reloaded": len(pkgs)}
+
+    with FakeEditor(st.cfg, handler) as ed:
+        r = st.apply_restore(st.plan_restore(1))
+    assert [c[0] for c in ed.calls] == ["dirty", "release", "reload"]
+    assert seen == ["dirty:AAAA-v2", "release:AAAA-v2", "reload:AAAA-v1"]
+    assert ed.calls[1] == ("release", ["/Game/Foo/A"], {})
+    assert r.written == 1 and asset.read_bytes() == b"AAAA-v1"
+
+
+def test_apply_restore_release_failure_ignored(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """release 가 실패를 돌려줘도 사전 잠금 검사가 통과하면 그대로 진행한다."""
+    monkeypatch.setattr(storemod, "editor_running", lambda: True)
+    st = _two_snapshots(project)
+
+    def handler(op, pkgs, args):
+        if op == "dirty":
+            return {"ok": True, "dirty": []}
+        if op == "release":
+            return {"ok": False, "released": [], "not_loaded": [], "failed": {pkgs[0]: "boom"}}
+        return {"ok": True, "reloaded": len(pkgs)}
+
+    with FakeEditor(st.cfg, handler):
+        r = st.apply_restore(st.plan_restore(1))
+    assert r.written == 1
+    assert (project / "Content" / "Foo" / "A.uasset").read_bytes() == b"AAAA-v1"
 
 
 def test_apply_restore_reload_fail(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:

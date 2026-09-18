@@ -32,7 +32,8 @@
 - `snap(..., only=[rel])` — 지정한 애셋만 새 상태로 올리고 나머지는 HEAD 유지
 - `plan_restore(sid, assets)` 는 드라이런: 되돌릴 애셋(M 수정 되돌림 / A 부활 / R 이동 / D 삭제) + 클래스별 집계 + 참조 검산만 만든다
 - 참조 검산: 결과 트리 각 애셋의 `/Game/` 의존성이 결과 트리·vendor·현재 디스크 어디에도 없으면 "깨질 참조"(`broken`), 롤백으로 사라지는 애셋을 참조하는 authored 애셋은 `dependents` 경고
-- `apply_restore` 순서: ① auto 부분 스냅샷 `롤백 직전 #<id>`(안전망) ② 객체를 `Content/` 로 복사(tmp→replace) ③ 결과 트리에 없는 authored 파일 삭제 ④ label 부분 스냅샷 `롤백: #<id>`
+- 에디터 파일 잠금: 에디터는 로드한 패키지의 `.uasset` 을 공유 없이 열어 둬 밖에서 덮어쓰면 `PermissionError [WinError 5]` 가 난다 → 쓰기 전에 브릿지 `release` 로 `unload_packages` 하고, 그래도 잠긴 파일이 있으면 `file_locked()` 사전 검사에서 아무것도 쓰지 않고 `RestoreBlocked(locked=[...])`. `tmp→replace` 는 `PermissionError` 시 0.2초 간격 5회 재시도, 성공·실패 무관하게 `finally` 에서 이번 실행의 `*.jokate-tmp` 삭제. 오래된(10분+) 잔여물은 데몬 시작·CLI restore 시작 때 `cleanup_tmp_files(cfg)` 로 정리
+- `apply_restore` 순서: ⓪ dirty 확인 → `release` → 사전 잠금 검사 ① auto 부분 스냅샷 `롤백 직전 #<id>`(안전망) ② 객체를 `Content/` 로 복사(tmp→replace) ③ 결과 트리에 없는 authored 파일 삭제 ④ label 부분 스냅샷 `롤백: #<id>`
 - 두 스냅샷은 이번 롤백이 건드리는 rel 만 담는 부분 스냅샷이다 → 무관한 애셋의 올리지 않은 변경은 롤백 뒤에도 '현재 변경사항' 에 남는다
 - 되돌릴 애셋의 디스크 상태가 HEAD 와 같으면 안전 스냅샷을 새로 만들지 않고 HEAD 를 직전 상태로 쓴다(`RestoreResult.safety_created=False`)
 - 객체 존재 검사는 실제로 쓸 항목에만 한다. 유실됐으면 아무것도 바꾸기 전에 `FileNotFoundError`
@@ -78,7 +79,7 @@
 | `response-<id>.json` | 에디터 | `{"id","ok",...}` |
 
 - `bridge-install <project>`: `jokate/ue/` 의 스크립트를 `<project>/Content/Python/` 으로 복사하고 `init_unreal.py` 에 `import jokate_bridge` 한 줄을 보장. `.py` 는 애셋이 아니라 스캐너가 무시한다
-- 에디터 쪽: `unreal.register_slate_post_tick_callback` 으로 1초마다 폴링. `dirty` → 요청 패키지 중 저장 안 된 것 목록. `reload` → dirty 대상이 있으면 `ok=false`(`args.discard_dirty` 면 통과), 존재하는 패키지는 `load_package` 후 `reload_packages(ASSUME_POSITIVE)`, 대상 폴더를 `scan_paths_synchronous(force_rescan)`. 예외는 `ok=false, error`
+- 에디터 쪽: `unreal.register_slate_post_tick_callback` 으로 1초마다 폴링. `dirty` → 요청 패키지 중 저장 안 된 것 목록. `release` → `find_package` 로 로드된 패키지를 찾아 `AssetEditorSubsystem.close_all_editors_for_asset`(실패 무시) 후 `unload_packages` → `{released, not_loaded, failed}` (파일 잠금 해제용). `reload` → dirty 대상이 있으면 `ok=false`(`args.discard_dirty` 면 통과), 존재하는 패키지는 `load_package` 후 `reload_packages(ASSUME_POSITIVE)`, 대상 폴더를 `scan_paths_synchronous(force_rescan)`. 예외는 `ok=false, error`
 - `restore --apply` 는 에디터 실행 중이면: 브릿지 없음 → 거부 / `dirty` 요청 → 저장 안 된 대상이 있으면 중단(`--discard-dirty` 로 통과) / 파일 쓰기·삭제 후 `reload` 요청
 - 선택 애셋 → 패키지명 → `package_to_rel`(`/Game/A/B` → `A/B.uasset`, 디스크에 `.umap` 이 있으면 `.umap`). `/Game` 밖은 무시
 

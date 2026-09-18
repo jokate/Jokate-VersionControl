@@ -1011,7 +1011,11 @@ async function applyRestore(id, assets, discard) {
     await loadLog(); await loadStatus(); await select(r.result.id);
   } catch (e) {
     const dirty = (e.status === 409 && e.body && Array.isArray(e.body.dirty)) ? e.body.dirty : [];
-    if (dirty.length) {
+    const locked = (e.status === 409 && e.body && Array.isArray(e.body.locked)) ? e.body.locked : [];
+    if (locked.length) {
+      box.innerHTML = `<div class="err"><b>${esc(e.message)}</b><br>잠긴 파일 (${locked.length}) — 에디터에서 그 애셋의 편집 창을 닫고 다시 시도하세요:<ul class="dirty">` +
+        locked.map(x => `<li>${esc(x)}</li>`).join('') + `</ul></div>`;
+    } else if (dirty.length) {
       box.innerHTML = `<div class="err"><b>${esc(e.message)}</b><br>에디터에 저장하지 않은 변경 (${dirty.length}):<ul class="dirty">` +
         dirty.map(x => `<li>${esc(x)}</li>`).join('') + `</ul><div class="btns"><button id="rdiscard" class="danger">저장 안 한 변경 버리고 진행</button></div></div>`;
       $('#rdiscard').onclick = () => applyRestore(id, assets, true);

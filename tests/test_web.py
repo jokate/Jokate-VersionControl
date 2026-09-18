@@ -210,6 +210,14 @@ def test_api_restore_apply_blocked(st: storemod.Store, monkeypatch: pytest.Monke
     with pytest.raises(storemod.RestoreBlocked) as ei2:
         web.api_restore_apply(st, 1)
     assert web.error_response(ei2.value)[0] == 409 and ei2.value.dirty == []
+    # 파일 잠김 → 409 본문에 locked
+    monkeypatch.setattr(storemod, "editor_running", lambda: False)
+    monkeypatch.setattr(storemod, "file_locked", lambda p: p.name == "A.uasset")
+    with pytest.raises(storemod.RestoreBlocked) as ei3:
+        web.api_restore_apply(st, 1, ["Foo/A.uasset"], False)
+    code3, body3 = web.error_response(ei3.value)
+    assert code3 == 409 and body3["locked"] == ["Foo/A.uasset"] and body3["dirty"] == []
+    assert (st.cfg.content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v2"
     # 그 외 매핑
     assert web.error_response(KeyError("x"))[0] == 404
     assert web.error_response(ValueError("x"))[0] == 400

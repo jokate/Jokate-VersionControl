@@ -345,6 +345,17 @@ class Store:
             if dirty and not discard_dirty:
                 raise RestoreBlocked("에디터에 저장 안 된 패키지가 있다 (저장하거나 --discard-dirty):\n  "
                                      + "\n  ".join(dirty), dirty=dirty)
+            # 에디터가 로드한 패키지는 .uasset 파일을 잠근다 → unload 로 잠금을 먼저 푼다.
+            # 실패해도 여기서 막지 않는다: 바로 다음 사전 잠금 검사가 실제 상태로 판단한다.
+            try:
+                bridge.request(self.cfg, "release", pkgs)
+            except (TimeoutError, OSError):
+                pass
+        # 사전 잠금 검사 (에디터가 꺼져 있어도 다른 프로그램이 잡고 있을 수 있다)
+        locked = [rel for rel in to_write + to_delete if file_locked(self.cfg.content / rel)]
+        if locked:
+            raise RestoreBlocked("파일이 다른 프로그램에 잠겨 있어 되돌릴 수 없다 — 에디터에서 그 애셋의 "
+                                 "편집 창을 닫고 다시 시도하라:\n  " + "\n  ".join(locked), locked=locked)
         # 이번 롤백이 실제로 건드리는 rel 만 스냅샷에 담는다 (무관한 애셋의 올리지 않은 변경은 그대로 둔다)
         affected = _affected_rels(plan.diff)
         head = self.head()
@@ -358,20 +369,36 @@ class Store:
         if safety is None:   # 되돌릴 애셋의 디스크 상태가 HEAD 그대로 → HEAD 가 곧 '롤백 직전'
             safety = head if head is not None else self.head()
         written = 0
-        for rel in to_write:
-            e = plan.result[rel]
-            dst = self.cfg.content / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            tmp = dst.with_name(dst.name + ".jokate-tmp")
-            shutil.copyfile(self.object_path(e.sha), tmp)
-            tmp.replace(dst)
-            written += 1
         deleted_files = 0
-        for rel in to_delete:
-            p = self.cfg.content / rel
-            if p.exists():
-                p.unlink()
-                deleted_files += 1
+        tmps: list[Path] = []
+        try:
+            for rel in to_write:
+                e = plan.result[rel]
+                dst = self.cfg.content / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dst.with_name(dst.name + ".jokate-tmp")
+                tmps.append(tmp)
+                shutil.copyfile(self.object_path(e.sha), tmp)
+                try:
+                    _replace_with_retry(tmp, dst)
+                except PermissionError as ex:
+                    raise RestoreBlocked(_partial_msg(rel, written, safety), locked=[rel]) from ex
+                written += 1
+            for rel in to_delete:
+                p = self.cfg.content / rel
+                if p.exists():
+                    try:
+                        p.unlink()
+                    except PermissionError as ex:
+                        raise RestoreBlocked(_partial_msg(rel, written, safety), locked=[rel]) from ex
+                    deleted_files += 1
+        finally:
+            for t in tmps:   # 이번 실행이 만든 잔여 tmp 는 성공·실패 상관없이 지운다
+                try:
+                    if t.exists():
+                        t.unlink()
+                except OSError:
+                    pass
         reloaded: int | None = None
         if use_bridge and pkgs:
             try:
@@ -575,11 +602,65 @@ class SquashHasLabels(ValueError):
 
 
 class RestoreBlocked(RuntimeError):
-    """적용 전 중단(파일 변경 없음): 브릿지 없음·dirty 확인 실패·저장 안 된 패키지. dirty 에 패키지 목록."""
+    """적용 전 중단(파일 변경 없음): 브릿지 없음·dirty 확인 실패·저장 안 된 패키지·파일 잠김.
 
-    def __init__(self, msg: str, dirty: list[str] | None = None):
+    dirty 에 패키지 목록, locked 에 잠긴(쓸 수 없는) 파일 rel 목록.
+    """
+
+    def __init__(self, msg: str, dirty: list[str] | None = None, locked: list[str] | None = None):
         super().__init__(msg)
         self.dirty: list[str] = list(dirty or [])
+        self.locked: list[str] = list(locked or [])
+
+
+def file_locked(path: Path) -> bool:
+    """대상 파일이 다른 프로세스에 쓰기 잠겨 있나 — 'r+b' 로 열어만 본다(내용은 안 건드림)."""
+    try:
+        if not path.exists():
+            return False
+        with open(path, "r+b"):
+            return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _replace_with_retry(tmp: Path, dst: Path, attempts: int = 5, delay: float = 0.2) -> None:
+    """tmp → dst 이름 바꾸기. 에디터가 막 놓아주는 중이면 PermissionError 가 잠깐 날 수 있어 재시도."""
+    for i in range(attempts):
+        try:
+            tmp.replace(dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(delay)
+
+
+def _partial_msg(rel: str, written: int, safety: "Snapshot | None") -> str:
+    msg = (f"파일이 잠겨 있어 쓰지 못했다: {rel} — 에디터에서 그 애셋의 편집 창을 닫고 다시 시도하라")
+    if written:
+        sid = safety.id if safety is not None else "?"
+        msg += f"\n(파일 {written}개는 이미 바뀌었다 — 안전 스냅샷 #{sid} 으로 되돌릴 수 있음)"
+    return msg
+
+
+def cleanup_tmp_files(cfg: Config, max_age_minutes: float = 10.0) -> int:
+    """Content 아래에 남은 오래된 *.jokate-tmp 잔여물 삭제 → 지운 개수."""
+    content = cfg.content
+    if not content.exists():
+        return 0
+    cutoff = time.time() - max_age_minutes * 60
+    n = 0
+    for p in content.rglob("*.jokate-tmp"):
+        try:
+            if p.is_file() and p.stat().st_mtime < cutoff:
+                p.unlink()
+                n += 1
+        except OSError:
+            pass
+    return n
 
 
 @dataclass

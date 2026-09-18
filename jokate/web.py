@@ -339,7 +339,7 @@ def error_response(e: BaseException) -> tuple[int, dict]:
     if isinstance(e, DaemonUnavailable):
         return 409, {"ok": False, "error": str(e)}
     if isinstance(e, RestoreBlocked):
-        return 409, {"ok": False, "error": str(e), "dirty": list(e.dirty)}
+        return 409, {"ok": False, "error": str(e), "dirty": list(e.dirty), "locked": list(e.locked)}
     if isinstance(e, SquashHasLabels):
         return 409, {"ok": False, "error": str(e),
                      "labels": [{"id": i, "message": m} for i, m in e.labels]}

@@ -246,3 +246,87 @@ def test_cli_status_and_snap_only(project: Path, capsys: pytest.CaptureFixture) 
     out = capsys.readouterr().out
     assert "A Foo/B.uasset" in out and "M Foo/A.uasset" not in out
     assert cli.main(["snap", str(project), "--only", "Foo/Nope.uasset"]) == 1
+
+
+# ---- 에디터 파일 잠금 (18c) ----
+
+def _two(project: Path, monkeypatch: pytest.MonkeyPatch | None = None) -> storemod.Store:
+    if monkeypatch is not None:
+        monkeypatch.setattr(storemod, "editor_running", lambda: False)
+    st = storemod.Store(cfgmod.load(project))
+    st.snap("first", kind="label")
+    (project / "Content" / "Foo" / "A.uasset").write_bytes(b"AAAA-v2")
+    st.snap("second", kind="label")
+    return st
+
+
+def test_restore_locked_file_blocks_everything(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """사전 잠금 검사에 걸리면 아무 파일도 안 바뀌고 안전 스냅샷도 안 만든다."""
+    content = project / "Content"
+    st = _two(project, monkeypatch)
+    monkeypatch.setattr(storemod, "file_locked", lambda p: p.name == "A.uasset")
+    with pytest.raises(storemod.RestoreBlocked) as ei:
+        st.apply_restore(st.plan_restore(1))
+    assert ei.value.locked == ["Foo/A.uasset"] and "편집 창을 닫고" in str(ei.value)
+    assert (content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v2"
+    assert st.head().id == 2                    # 안전 스냅샷 없음
+    assert not list(content.rglob("*.jokate-tmp"))
+
+
+def test_restore_replace_retries(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """replace 가 두 번 PermissionError 를 내도 재시도로 성공한다."""
+    content = project / "Content"
+    st = _two(project, monkeypatch)
+    real = Path.replace
+    calls = {"n": 0}
+
+    def flaky(self, target):   # noqa: ANN001
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise PermissionError(5, "액세스가 거부되었습니다")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky)
+    monkeypatch.setattr(storemod.time, "sleep", lambda s: None)
+    r = st.apply_restore(st.plan_restore(1))
+    assert calls["n"] == 3 and r.written == 1
+    assert (content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v1"
+    assert not list(content.rglob("*.jokate-tmp"))
+
+
+def test_restore_replace_gives_up_no_tmp_left(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """끝까지 실패하면 RestoreBlocked + .jokate-tmp 잔여물 없음."""
+    content = project / "Content"
+    st = _two(project, monkeypatch)
+
+    def always(self, target):   # noqa: ANN001
+        raise PermissionError(5, "액세스가 거부되었습니다")
+
+    monkeypatch.setattr(Path, "replace", always)
+    monkeypatch.setattr(storemod.time, "sleep", lambda s: None)
+    with pytest.raises(storemod.RestoreBlocked) as ei:
+        st.apply_restore(st.plan_restore(1))
+    assert ei.value.locked == ["Foo/A.uasset"]
+    assert (content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v2"
+    assert not list(content.rglob("*.jokate-tmp"))
+
+
+def test_file_locked_normal_file(project: Path) -> None:
+    p = project / "Content" / "Foo" / "A.uasset"
+    assert storemod.file_locked(p) is False
+    assert storemod.file_locked(p.with_name("Nope.uasset")) is False
+    assert p.read_bytes() == b"AAAA-v1"    # 검사가 내용을 건드리지 않는다
+
+
+def test_cleanup_tmp_files_and_scan_ignores_tmp(project: Path) -> None:
+    cfg = cfgmod.load(project)
+    old = project / "Content" / "Foo" / "A.uasset.jokate-tmp"
+    new = project / "Content" / "Foo" / "C.uasset.jokate-tmp"
+    old.write_bytes(b"x")
+    new.write_bytes(b"y")
+    os.utime(old, (0, 0))
+    st = storemod.Store(cfg)
+    rels = {r.rel for r in st.scan_authored()}
+    assert "Foo/A.uasset.jokate-tmp" not in rels and "Foo/A.uasset" in rels
+    assert storemod.cleanup_tmp_files(cfg) == 1
+    assert not old.exists() and new.exists()

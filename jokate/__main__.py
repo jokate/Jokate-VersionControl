@@ -180,6 +180,7 @@ def cmd_restore(a: argparse.Namespace) -> int:
     from . import store as storemod
     cfg = cfgmod.load(a.project)
     st = storemod.Store(cfg)
+    storemod.cleanup_tmp_files(cfg)   # 지난 롤백이 남긴 오래된 *.jokate-tmp 정리
     try:
         plan = st.plan_restore(a.id, a.asset or None)
     except KeyError as e:

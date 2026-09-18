@@ -26,6 +26,7 @@ from . import watch as watchmod
 from . import web as webmod
 from .config import Config
 from .store import Store, format_ts
+from .store import cleanup_tmp_files as store_cleanup_tmp_files
 
 STATE_FILE = "daemon.json"
 LOG_FILE = "daemon.log"
@@ -343,6 +344,7 @@ def run(cfg: Config, port: int | None = None, interval: float = 2.0, debounce: f
         _st = Store(cfg)
         try:
             uediffmod.cleanup_tmp(_st)      # 지난 diff 임시 복사본 정리
+            store_cleanup_tmp_files(cfg)    # 롤백이 남긴 오래된 *.jokate-tmp 정리
         finally:
             _st.close()
     except Exception:  # noqa: BLE001

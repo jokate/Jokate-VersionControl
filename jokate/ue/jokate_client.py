@@ -197,12 +197,18 @@ def format_blocked(body):
     """409 본문 → 저장 안 된 패키지 안내."""
     body = body or {}
     dirty = list(body.get("dirty") or [])
+    locked = list(body.get("locked") or [])
     lines = ["되돌리기가 막혔습니다: %s" % body.get("error", "저장하지 않은 변경이 있습니다")]
     if dirty:
         lines.append("저장 안 된 패키지 %d개:" % len(dirty))
         lines.extend("  " + p for p in dirty[:10])
         if len(dirty) > 10:
             lines.append("  … 외 %d개" % (len(dirty) - 10))
+    if locked:
+        lines.append("잠긴 파일 %d개 (그 애셋의 편집 창을 닫고 다시 시도):" % len(locked))
+        lines.extend("  " + p for p in locked[:10])
+        if len(locked) > 10:
+            lines.append("  … 외 %d개" % (len(locked) - 10))
     return "\n".join(lines)
 
 
