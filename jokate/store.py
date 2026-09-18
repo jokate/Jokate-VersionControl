@@ -183,7 +183,10 @@ class Store:
     def status(self) -> Diff:
         """HEAD 트리 → 작업 트리(디스크) Diff. 아직 스냅샷에 올리지 않은 변경."""
         parent = self.head()
-        return diff_trees(self.tree(parent.id if parent else None), self._work_tree())
+        old_tree = self.tree(parent.id if parent else None)
+        work = self._work_tree()
+        self._mark_noise(old_tree, list(work.values()))  # 올리기 전에도 리세이브만인지 보이게
+        return diff_trees(old_tree, work)
 
     def snap(self, message: str = "", *, kind: str | None = None,
              force: bool = False, only: list[str] | None = None) -> tuple[Snapshot | None, Diff, int]:

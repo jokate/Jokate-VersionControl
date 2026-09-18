@@ -33,6 +33,13 @@
   .snap.label .msg { font-weight:600; color:var(--fg); }
   .snap .meta { font-size:12px; color:var(--dim); }
   .snap .counts { font-size:12px; margin-top:2px; }
+  .snap.noise { opacity:.45; }
+  .snap.noise.sel { opacity:.8; }
+  .badge.noise { background:#3a3a2a; color:#c9b458; }
+  .hidden-noise { padding:4px 14px; font-size:11px; color:var(--dim); border-bottom:1px dashed var(--line); cursor:pointer; }
+  tr.noise { opacity:.5; }
+  tr.noise td.k { color:#c9b458; }
+  #showNoise { font-size:12px; color:var(--dim); margin-left:8px; white-space:nowrap; }
   .badge { display:inline-block; font-size:11px; padding:0 6px; border-radius:10px; background:var(--line); color:var(--fg); margin:2px 4px 0 0; }
   #detail { overflow:auto; padding:14px 18px; }
   #detail h2 { font-size:15px; margin:0 0 4px; }
@@ -88,6 +95,7 @@
   <input id="msg" placeholder="스냅샷 메시지" maxlength="200">
   <button id="mksnap">스냅샷 만들기</button>
   <button id="reload" class="ghost">새로고침</button>
+  <label id="showNoise"><input type="checkbox" id="showNoiseCb"> 리세이브 스냅샷 보기</label>
   <span id="status"></span>
 </header>
 <main>
@@ -104,9 +112,11 @@
 <div id="modal"><div id="modalBox"></div></div>
 <div id="toast"></div>
 <script>
-const KIND = {added:'추가', modified:'수정', moved:'이동', deleted:'삭제'};
-const ORDER = ['modified','added','moved','deleted'];
-let selected = null, selectedRel = null, headId = null;
+const KIND = {added:'추가', modified:'수정', resave:'리세이브', moved:'이동', deleted:'삭제'};
+const ORDER = ['modified','added','moved','deleted','resave'];
+let selected = null, selectedRel = null, headId = null, lastLog = [];
+const NOISE_KEY = 'jokate.showNoise';
+let showNoise = localStorage.getItem(NOISE_KEY) === '1';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -257,23 +267,45 @@ document.addEventListener('keydown', e => {
 async function loadLog() {
   status('불러오는 중…');
   try {
-    const log = await api('/api/log');
-    headId = log.length ? Math.max(...log.map(s => s.id)) : null;
-    const tl = $('#timeline');
-    tl.innerHTML = log.length ? '' : '<p class="dim" style="padding:14px">스냅샷 없음</p>';
-    for (const s of log) {
-      const div = document.createElement('div');
-      div.className = `snap ${s.kind}` + (s.id === selected ? ' sel' : '');
-      div.dataset.id = s.id;
-      div.innerHTML = `<div class="msg">#${s.id} ${esc(s.message || (s.kind === 'auto' ? '(자동)' : ''))}</div>
-        <div class="meta">${esc(s.time)} · ${s.kind} · ${s.total}개</div>
-        <div class="counts">${countsText(s.counts)}</div><div>${badges(s.by_class)}</div>`;
-      div.onclick = () => select(s.id);
-      tl.appendChild(div);
-    }
-    status(`스냅샷 ${log.length}개`);
+    lastLog = await api('/api/log');
+    headId = lastLog.length ? Math.max(...lastLog.map(s => s.id)) : null;
+    renderTimeline();
+    status(`스냅샷 ${lastLog.length}개`);
   } catch (e) { status('오류: ' + e.message); }
 }
+// all_noise(리세이브만) 스냅샷은 흐리게 + 배지. 토글이 꺼져 있으면 연속된 것을 한 줄로 접는다(선택된 것은 항상 표시)
+function renderTimeline() {
+  const tl = $('#timeline');
+  tl.innerHTML = lastLog.length ? '' : '<p class="dim" style="padding:14px">스냅샷 없음</p>';
+  let hidden = [];
+  const flush = () => {
+    if (!hidden.length) return;
+    const div = document.createElement('div');
+    div.className = 'hidden-noise'; div.title = '클릭하면 리세이브 스냅샷을 펼칩니다';
+    div.textContent = `리세이브 스냅샷 ${hidden.length}개 숨김 (#${hidden[hidden.length - 1]}–#${hidden[0]})`;
+    div.onclick = () => setShowNoise(true);
+    tl.appendChild(div); hidden = [];
+  };
+  for (const s of lastLog) {
+    if (s.all_noise && !showNoise && s.id !== selected) { hidden.push(s.id); continue; }
+    flush();
+    const div = document.createElement('div');
+    div.className = `snap ${s.kind}` + (s.all_noise ? ' noise' : '') + (s.id === selected ? ' sel' : '');
+    div.dataset.id = s.id;
+    div.innerHTML = `<div class="msg">#${s.id} ${esc(s.message || (s.kind === 'auto' ? '(자동)' : ''))}${s.all_noise ? ' <span class="badge noise">리세이브만</span>' : ''}</div>
+      <div class="meta">${esc(s.time)} · ${s.kind} · ${s.total}개</div>
+      <div class="counts">${countsText(s.counts)}</div><div>${badges(s.by_class)}</div>`;
+    div.onclick = () => select(s.id);
+    tl.appendChild(div);
+  }
+  flush();
+}
+function setShowNoise(on) {
+  showNoise = !!on; localStorage.setItem(NOISE_KEY, showNoise ? '1' : '0');
+  $('#showNoiseCb').checked = showNoise; renderTimeline();
+}
+$('#showNoiseCb').checked = showNoise;
+$('#showNoiseCb').onchange = e => setShowNoise(e.target.checked);
 
 async function loadStatus() {
   const body = $('#changesBody');
@@ -288,10 +320,11 @@ async function loadStatus() {
 
 function rows(d) {
   const out = [];
-  for (const x of d.modified) out.push(['M', x.new.rel, x.new.cls, `${x.old.size}→${x.new.size}B`]);
+  for (const x of d.modified) if (!x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${x.old.size}→${x.new.size}B`]);
   for (const x of d.added) out.push(['A', x.rel, x.cls, `${x.size}B`]);
   for (const x of d.moved) out.push(['R', x.new.rel, x.new.cls, `← ${x.old.rel}`]);
   for (const x of d.deleted) out.push(['D', x.rel, x.cls, `${x.size}B`]);
+  for (const x of d.modified) if (x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${x.old.size}→${x.new.size}B · 리세이브만`, true]);
   return out;
 }
 // listName 이 있으면 선택 가능한 목록(헤더 체크박스·선택 수). withClass: 클래스별 집계 표
@@ -300,10 +333,11 @@ function diffTable(d, listName, withClass = true) {
   if (!rs.length) return '<p class="dim">변경 없음</p>';
   let h = '<table><tr>' + (listName ? '<th class="cb"><input type="checkbox" class="selall" title="전체 선택/해제"></th>' : '') +
     `<th></th><th>애셋${listName ? ' <span class="selcount"></span>' : ''}</th><th>클래스</th><th></th></tr>`;
-  for (const [k, rel, cls, extra] of rs)
-    h += `<tr class="${listName ? 'row' : ''}" data-rel="${esc(rel)}">` + (listName ? `<td class="cb"><input type="checkbox" tabindex="-1" ${sel[listName].has(rel) ? 'checked' : ''}></td>` : '') +
-      `<td class="k ${k}">${k}</td><td>${esc(rel)}</td><td><span class="badge">${esc(cls)}</span></td><td class="dim">${esc(extra)}</td></tr>`;
+  for (const [k, rel, cls, extra, noise] of rs)
+    h += `<tr class="${listName ? 'row' : ''}${noise ? ' noise' : ''}" data-rel="${esc(rel)}">` + (listName ? `<td class="cb"><input type="checkbox" tabindex="-1" ${sel[listName].has(rel) ? 'checked' : ''}></td>` : '') +
+      `<td class="k ${k}" title="${noise ? '리세이브만(헤더만 변경)' : ''}">${k}${noise ? '~' : ''}</td><td>${esc(rel)}</td><td><span class="badge">${esc(cls)}</span></td><td class="dim">${esc(extra)}</td></tr>`;
   h += '</table>';
+  if (d.counts && d.counts.resave) h += `<div class="dim" style="font-size:12px">리세이브만 ${d.counts.resave}${d.all_noise ? ' · 이 변경은 전부 리세이브만' : ''}</div>`;
   const bc = Object.keys(d.by_class);
   if (withClass && bc.length) {
     h += '<table><tr><th>클래스</th><th>집계</th></tr>';

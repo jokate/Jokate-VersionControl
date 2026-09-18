@@ -33,8 +33,9 @@ def test_api_log(st: storemod.Store) -> None:
     log = web.api_log(st)
     assert [x["id"] for x in log] == [2, 1]
     assert log[0]["kind"] == "auto" and log[1]["kind"] == "label"
-    assert log[0]["counts"] == {"added": 1, "modified": 1, "moved": 1, "deleted": 0}
-    assert log[1]["counts"] == {"added": 2, "modified": 0, "moved": 0, "deleted": 0}
+    assert log[0]["counts"] == {"added": 1, "modified": 1, "resave": 0, "moved": 1, "deleted": 0}
+    assert log[1]["counts"] == {"added": 2, "modified": 0, "resave": 0, "moved": 0, "deleted": 0}
+    assert log[0]["all_noise"] is False and log[1]["all_noise"] is False
     assert log[0]["total"] == 3 and "time" in log[0]
     assert "?" in log[0]["by_class"]
 
@@ -44,6 +45,7 @@ def test_api_snap(st: storemod.Store) -> None:
     assert r["snapshot"]["id"] == 2 and r["snapshot"]["parent"] == 1
     d = r["diff"]
     assert [x["new"]["rel"] for x in d["modified"]] == ["Foo/A.uasset"]
+    assert d["modified"][0]["new"]["noise"] is False and d["all_noise"] is False
     assert [x["rel"] for x in d["added"]] == ["Foo/B.uasset"]
     assert [(x["old"]["rel"], x["new"]["rel"]) for x in d["moved"]] == [("Foo/C.uasset", "Foo/C2.uasset")]
     assert d["counts"]["deleted"] == 0
@@ -68,21 +70,52 @@ def test_api_asset(st: storemod.Store) -> None:
 def test_api_restore_dry_run(st: storemod.Store) -> None:
     r = web.api_restore(st, 1)
     assert r["snapshot"]["id"] == 1
-    assert r["diff"]["counts"] == {"added": 0, "modified": 1, "moved": 1, "deleted": 1}
+    assert r["diff"]["counts"] == {"added": 0, "modified": 1, "resave": 0, "moved": 1, "deleted": 1}
     assert r["broken"] == [] and r["dependents"] == []
     # 드라이런: 파일·헤드 변화 없음
     assert (st.cfg.content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v2"
     assert st.head().id == 2
     one = web.api_restore(st, 1, ["Foo/A.uasset"])
-    assert one["diff"]["counts"] == {"added": 0, "modified": 1, "moved": 0, "deleted": 0}
+    assert one["diff"]["counts"] == {"added": 0, "modified": 1, "resave": 0, "moved": 0, "deleted": 0}
     with pytest.raises(KeyError):
         web.api_restore(st, 1, ["Nope.uasset"])
+
+
+FIXTURE = Path(__file__).parent / "fixtures" / "IA_Aim.uasset"
+
+
+def test_api_noise_serialization(tmp_path: Path) -> None:
+    """리세이브만 스냅샷: api_log 의 all_noise/counts.resave, api_snap 의 entry.noise."""
+    if not FIXTURE.exists():
+        pytest.skip(f"픽스처 없음: {FIXTURE}")
+    data = FIXTURE.read_bytes()
+    root = tmp_path / "Proj"
+    (root / "Content" / "Foo").mkdir(parents=True)
+    cfgmod.init(root)
+    asset = root / "Content" / "Foo" / "IA_Aim.uasset"
+    asset.write_bytes(data)
+    st = storemod.Store(cfgmod.load(root))
+    st.snap("first")
+    b = bytearray(data)
+    for i in range(24, 44):  # SavedHash 20B 만 뒤집기 → 헤더만 변경
+        b[i] ^= 0xFF
+    asset.write_bytes(bytes(b))
+    st.snap("")
+    log = web.api_log(st)
+    assert log[0]["id"] == 2 and log[0]["all_noise"] is True
+    assert log[0]["counts"]["resave"] == 1 and log[0]["counts"]["modified"] == 0
+    assert log[1]["all_noise"] is False
+    d = web.api_snap(st, 2)["diff"]
+    assert d["all_noise"] is True and d["counts"]["resave"] == 1
+    assert d["modified"][0]["new"]["noise"] is True
+    assert any(c.get("resave") == 1 for c in d["by_class"].values())
+    assert web.api_status(st)["diff"]["all_noise"] is False
 
 
 def test_api_snap_create(st: storemod.Store) -> None:
     r = web.api_snap_create(st, "라벨")
     assert r["snapshot"]["id"] == 3 and r["snapshot"]["kind"] == "label"
-    assert r["diff"]["counts"] == {"added": 0, "modified": 0, "moved": 0, "deleted": 0}
+    assert r["diff"]["counts"] == {"added": 0, "modified": 0, "resave": 0, "moved": 0, "deleted": 0}
     assert web.api_log(st)[0]["message"] == "라벨"
 
 
@@ -96,15 +129,15 @@ def test_api_thumb(st: storemod.Store) -> None:
 
 
 def test_api_status_and_snap_only(st: storemod.Store) -> None:
-    assert web.api_status(st)["diff"]["counts"] == {"added": 0, "modified": 0, "moved": 0, "deleted": 0}
+    assert web.api_status(st)["diff"]["counts"] == {"added": 0, "modified": 0, "resave": 0, "moved": 0, "deleted": 0}
     foo = st.cfg.content / "Foo"
     (foo / "A.uasset").write_bytes(b"AAAA-v3")
     (foo / "D.uasset").write_bytes(b"DDDD")
     d = web.api_status(st)["diff"]
-    assert d["counts"] == {"added": 1, "modified": 1, "moved": 0, "deleted": 0}
+    assert d["counts"] == {"added": 1, "modified": 1, "resave": 0, "moved": 0, "deleted": 0}
     r = web.api_snap_create(st, "부분", ["Foo/A.uasset"])
     assert r["snapshot"]["id"] == 3 and r["stored"] == 1
-    assert r["diff"]["counts"] == {"added": 0, "modified": 1, "moved": 0, "deleted": 0}
+    assert r["diff"]["counts"] == {"added": 0, "modified": 1, "resave": 0, "moved": 0, "deleted": 0}
     assert set(st.tree(3)) == {"Foo/A.uasset", "Foo/B.uasset", "Foo/C2.uasset"}
     assert web.api_status(st)["diff"]["counts"]["added"] == 1   # D 는 아직 안 올라감
     assert web.api_snap_create(st, "무변경", ["Foo/A.uasset"])["snapshot"] is None

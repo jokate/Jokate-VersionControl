@@ -33,7 +33,13 @@ STATIC = Path(__file__).parent / "web_static"
 
 # ---- 직렬화 ----
 def _entry(e: TreeEntry) -> dict:
-    return {"rel": e.rel, "sha": e.sha, "size": e.size, "cls": e.cls or "?"}
+    return {"rel": e.rel, "sha": e.sha, "size": e.size, "cls": e.cls or "?", "noise": bool(e.noise)}
+
+
+def _counts(d: Diff) -> dict:
+    """modified 는 실제 변경 수, resave 는 리세이브만(noise) 수."""
+    return {"added": len(d.added), "modified": len(d.real_modified), "resave": len(d.resave),
+            "moved": len(d.moved), "deleted": len(d.deleted)}
 
 
 def _snapshot(s: Snapshot) -> dict:
@@ -47,9 +53,9 @@ def _diff(d: Diff) -> dict:
         "modified": [{"old": _entry(o), "new": _entry(n)} for o, n in d.modified],
         "moved": [{"old": _entry(o), "new": _entry(n)} for o, n in d.moved],
         "deleted": [_entry(e) for e in d.deleted],
-        "counts": {"added": len(d.added), "modified": len(d.modified),
-                   "moved": len(d.moved), "deleted": len(d.deleted)},
+        "counts": _counts(d),
         "by_class": {cls: dict(c) for cls, c in sorted(d.by_class().items())},
+        "all_noise": d.all_noise,
     }
 
 
@@ -64,9 +70,9 @@ def api_log(store: Store) -> list[dict]:
         d = diff_trees(trees[s.parent], trees[s.id])
         item = _snapshot(s)
         item["total"] = len(trees[s.id])
-        item["counts"] = {"added": len(d.added), "modified": len(d.modified),
-                          "moved": len(d.moved), "deleted": len(d.deleted)}
+        item["counts"] = _counts(d)
         item["by_class"] = {cls: dict(c) for cls, c in sorted(d.by_class().items())}
+        item["all_noise"] = d.all_noise
         out.append(item)
     return out
 
