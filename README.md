@@ -28,7 +28,16 @@ python -m jokate log     <project>               # 스냅샷 목록
 python -m jokate show    <project> <id>          # 직전 스냅샷 대비 추가(A)/수정(M)/이동(R)/삭제(D) + 클래스별 집계
 python -m jokate restore <project> <id> [--asset rel ...] [--apply]   # 롤백. 기본 드라이런, --apply 로 적용
 python -m jokate watch   <project> [--interval 2] [--debounce 5]      # 저장 감지 자동 스냅샷 데몬 (Ctrl+C 종료)
+python -m jokate serve   <project> [--port 8765]                      # 타임라인 웹 UI (http://127.0.0.1:8765/)
 ```
+
+## 타임라인 웹 UI (serve)
+
+- 표준 라이브러리 `http.server` 만 사용, 프레임워크 없음. 단일 HTML + vanilla JS, 다크 테마, 한국어
+- 왼쪽 타임라인(label 진하게 / auto 흐리게, `수정 3 · 추가 1` 건수 + 클래스 배지), 오른쪽 선택 스냅샷의 A/M/R/D 목록
+- 목록 항목을 클릭하면 하단에 그 애셋의 버전 히스토리 + 버전별 썸네일(패키지 헤더의 첫 썸네일)
+- 상단 메시지 입력 + '스냅샷 만들기'(label), 상세의 '이 시점으로 되돌리기 미리보기'(드라이런 + 참조 경고만, 적용은 CLI `restore --apply`)
+- JSON API: `GET /api/log`, `GET /api/snap/<id>`, `GET /api/asset?rel=`, `GET /api/thumb?sha=`, `GET /api/restore/<id>[?asset=]`, `POST /api/snap {message}`
 
 ## 자동 스냅샷 (watch)
 
@@ -59,12 +68,13 @@ python -m jokate watch   <project> [--interval 2] [--debounce 5]      # 저장 �
 - `jokate/scan.py` — 등급 분류 + 애셋 레코드(클래스·부모·의존성·해시)
 - `jokate/store.py` — 스냅샷 저장소 (내용주소 객체 + SQLite 인덱스, 트리 diff)
 - `jokate/watch.py` — 저장 감지 자동 스냅샷 데몬 (폴링 + debounce, `poll_once` 순수 함수)
+- `jokate/web.py` + `jokate/web_static/index.html` — 타임라인 웹 UI (JSON API 는 `api_*` 순수 함수, 서버 없이 테스트)
 - `jokate/config.py` — 프로젝트 설정
 - `jokate/__main__.py` — CLI
 
 ## 로드맵
 
 1. ~~헤더 파서 + 스캐너~~
-2. 스냅샷 저장소 (내용주소 + SQLite) + 타임라인 웹 UI
+2. ~~스냅샷 저장소 (내용주소 + SQLite) + 타임라인 웹 UI~~
 3. ~~롤백 (시점 전체 복귀 / 애셋 단위, 드라이런 + 안전 스냅샷, 참조 검산)~~ → 애셋 히스토리, UE Python 브릿지
 4. ~~저장 감지 자동 스냅샷 데몬 (watch)~~ → 리세이브 noise 필터, rename 추적

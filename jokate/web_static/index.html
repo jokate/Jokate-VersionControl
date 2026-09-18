@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>jokate 타임라인</title>
+<style>
+  :root { --bg:#14161a; --panel:#1c1f25; --line:#2a2e36; --fg:#e6e8eb; --dim:#8a919c; --acc:#5aa0ff;
+          --a:#3fb950; --m:#d29922; --r:#a371f7; --d:#f85149; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui, sans-serif; }
+  header { display:flex; gap:8px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:16px; margin:0 16px 0 0; }
+  header input { flex:1; max-width:480px; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:6px 10px; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:4px; padding:6px 12px; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { color:var(--dim); margin-left:8px; }
+  main { display:grid; grid-template-columns:340px 1fr; height:calc(100vh - 53px); }
+  #timeline { border-right:1px solid var(--line); overflow:auto; }
+  .snap { padding:10px 14px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .snap:hover { background:#20242b; }
+  .snap.sel { background:#232a36; border-left:3px solid var(--acc); }
+  .snap.auto { color:var(--dim); }
+  .snap.label .msg { font-weight:600; color:var(--fg); }
+  .snap .meta { font-size:12px; color:var(--dim); }
+  .snap .counts { font-size:12px; margin-top:2px; }
+  .badge { display:inline-block; font-size:11px; padding:0 6px; border-radius:10px; background:var(--line); color:var(--fg); margin:2px 4px 0 0; }
+  #detail { overflow:auto; padding:14px 18px; }
+  #detail h2 { font-size:15px; margin:0 0 4px; }
+  .dim { color:var(--dim); }
+  table { border-collapse:collapse; width:100%; margin:8px 0 14px; }
+  td, th { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line); font-size:13px; }
+  th { color:var(--dim); font-weight:normal; }
+  tr.row { cursor:pointer; }
+  tr.row:hover { background:#20242b; }
+  tr.row.sel { background:#232a36; }
+  .k { font-weight:700; width:24px; }
+  .k.A { color:var(--a);} .k.M { color:var(--m);} .k.R { color:var(--r);} .k.D { color:var(--d);}
+  #history { border-top:1px solid var(--line); margin-top:16px; padding-top:12px; }
+  .versions { display:flex; gap:12px; overflow-x:auto; padding:6px 0; }
+  .ver { min-width:150px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px; font-size:12px; }
+  .ver.changed { border-color:var(--m); }
+  .ver img { width:128px; height:128px; object-fit:contain; background:#0d0f12; border-radius:4px; display:block; margin-bottom:6px; }
+  .ver .nothumb { width:128px; height:128px; display:flex; align-items:center; justify-content:center; color:var(--dim); background:#0d0f12; border-radius:4px; margin-bottom:6px; }
+  .warn { background:#3a2a12; border:1px solid var(--m); border-radius:6px; padding:8px 12px; margin:8px 0; }
+  .err { background:#3a1a1a; border:1px solid var(--d); border-radius:6px; padding:8px 12px; margin:8px 0; }
+  .ok { color:var(--a); }
+  #restore { margin-top:16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>jokate</h1>
+  <input id="msg" placeholder="스냅샷 메시지" maxlength="200">
+  <button id="mksnap">스냅샷 만들기</button>
+  <button id="reload" class="ghost">새로고침</button>
+  <span id="status"></span>
+</header>
+<main>
+  <div id="timeline"></div>
+  <div id="detail"><p class="dim">왼쪽에서 스냅샷을 선택하세요.</p></div>
+</main>
+<script>
+const KIND = {added:'추가', modified:'수정', moved:'이동', deleted:'삭제'};
+const ORDER = ['modified','added','moved','deleted'];
+let selected = null, selectedRel = null;
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const status = t => { $('#status').textContent = t; };
+
+async function api(path, opt) {
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({error: r.statusText}));
+  if (!r.ok) throw new Error(j.error || r.status);
+  return j;
+}
+function countsText(c) {
+  return ORDER.filter(k => c[k]).map(k => `${KIND[k]} ${c[k]}`).join(' · ') || '변경 없음';
+}
+function badges(bc) {
+  return Object.keys(bc).map(cls => {
+    const n = Object.values(bc[cls]).reduce((a, b) => a + b, 0);
+    return `<span class="badge">${esc(cls)} ${n}</span>`;
+  }).join('');
+}
+
+async function loadLog() {
+  status('불러오는 중…');
+  try {
+    const log = await api('/api/log');
+    const tl = $('#timeline');
+    tl.innerHTML = log.length ? '' : '<p class="dim" style="padding:14px">스냅샷 없음</p>';
+    for (const s of log) {
+      const div = document.createElement('div');
+      div.className = `snap ${s.kind}` + (s.id === selected ? ' sel' : '');
+      div.dataset.id = s.id;
+      div.innerHTML = `<div class="msg">#${s.id} ${esc(s.message || (s.kind === 'auto' ? '(자동)' : ''))}</div>
+        <div class="meta">${esc(s.time)} · ${s.kind} · ${s.total}개</div>
+        <div class="counts">${countsText(s.counts)}</div><div>${badges(s.by_class)}</div>`;
+      div.onclick = () => select(s.id);
+      tl.appendChild(div);
+    }
+    status(`스냅샷 ${log.length}개`);
+  } catch (e) { status('오류: ' + e.message); }
+}
+
+function rows(d) {
+  const out = [];
+  for (const x of d.modified) out.push(['M', x.new.rel, x.new.cls, `${x.old.size}→${x.new.size}B`]);
+  for (const x of d.added) out.push(['A', x.rel, x.cls, `${x.size}B`]);
+  for (const x of d.moved) out.push(['R', x.new.rel, x.new.cls, `← ${x.old.rel}`]);
+  for (const x of d.deleted) out.push(['D', x.rel, x.cls, `${x.size}B`]);
+  return out;
+}
+function diffTable(d, clickable) {
+  const rs = rows(d);
+  if (!rs.length) return '<p class="dim">변경 없음</p>';
+  let h = '<table><tr><th></th><th>애셋</th><th>클래스</th><th></th></tr>';
+  for (const [k, rel, cls, extra] of rs)
+    h += `<tr class="${clickable ? 'row' : ''}" data-rel="${esc(rel)}"><td class="k ${k}">${k}</td><td>${esc(rel)}</td><td>${esc(cls)}</td><td class="dim">${esc(extra)}</td></tr>`;
+  h += '</table>';
+  const bc = Object.keys(d.by_class);
+  if (bc.length) {
+    h += '<table><tr><th>클래스</th><th>집계</th></tr>';
+    for (const cls of bc) h += `<tr><td>${esc(cls)}</td><td>${countsText(d.by_class[cls])}</td></tr>`;
+    h += '</table>';
+  }
+  return h;
+}
+
+async function select(id) {
+  selected = id; selectedRel = null;
+  document.querySelectorAll('.snap').forEach(e => e.classList.toggle('sel', +e.dataset.id === id));
+  const det = $('#detail');
+  try {
+    const {snapshot: s, diff: d} = await api('/api/snap/' + id);
+    det.innerHTML = `<h2>#${s.id} ${esc(s.message || '(자동)')}</h2>
+      <div class="dim">${esc(s.time)} · ${s.kind} · 직전 #${s.parent ?? '-'} 대비 ${countsText(d.counts)}</div>
+      ${diffTable(d, true)}
+      <div id="restore"><button id="preview" class="ghost">이 시점으로 되돌리기 미리보기</button><div id="restoreOut"></div></div>
+      <div id="history"></div>`;
+    det.querySelectorAll('tr.row').forEach(tr => tr.onclick = () => showHistory(tr.dataset.rel, tr));
+    $('#preview').onclick = () => previewRestore(id);
+  } catch (e) { det.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+async function showHistory(rel, tr) {
+  selectedRel = rel;
+  document.querySelectorAll('tr.row').forEach(e => e.classList.toggle('sel', e === tr));
+  const h = $('#history');
+  h.innerHTML = `<h2>${esc(rel)} 버전 히스토리</h2><p class="dim">불러오는 중…</p>`;
+  try {
+    const {versions} = await api('/api/asset?rel=' + encodeURIComponent(rel));
+    if (!versions.length) { h.innerHTML += '<p class="dim">기록 없음</p>'; return; }
+    let html = `<h2>${esc(rel)} 버전 히스토리</h2><div class="versions">`;
+    for (const v of versions) {
+      const thumb = v.sha
+        ? `<img loading="lazy" src="/api/thumb?sha=${v.sha}" alt="" onerror="this.outerHTML='<div class=nothumb>썸네일 없음</div>'">`
+        : '<div class="nothumb">삭제됨</div>';
+      html += `<div class="ver ${v.changed ? 'changed' : ''}">${thumb}
+        <div><b>#${v.id}</b> ${esc(KIND[v.state] || '동일')}</div>
+        <div class="dim">${esc(v.time)}</div>
+        <div class="dim">${v.size != null ? v.size + 'B' : ''} ${v.sha ? v.sha.slice(0, 8) : ''}</div>
+        <div>${esc(v.message)}</div></div>`;
+    }
+    h.innerHTML = html + '</div>';
+  } catch (e) { h.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+async function previewRestore(id) {
+  const out = $('#restoreOut');
+  out.innerHTML = '<p class="dim">계산 중…</p>';
+  try {
+    const p = await api('/api/restore/' + id);
+    let html = `<p>현재 → #${id} 로 되돌리면: ${countsText(p.diff.counts)}</p>` + diffTable(p.diff, false);
+    if (p.dependents.length)
+      html += `<div class="warn">경고: 롤백으로 사라지는 애셋을 참조 (${p.dependents.length})<br>` +
+        p.dependents.map(x => `! ${esc(x.rel)} → ${esc(x.dep)}`).join('<br>') + '</div>';
+    if (p.broken.length)
+      html += `<div class="warn">경고: 깨질 참조 (${p.broken.length})<br>` +
+        p.broken.map(x => `! ${esc(x.rel)} → ${esc(x.dep)}`).join('<br>') + '</div>';
+    if (!p.dependents.length && !p.broken.length) html += '<p class="ok">참조 검산: 이상 없음</p>';
+    html += `<p class="dim">드라이런입니다. 적용은 CLI: <code>python -m jokate restore &lt;project&gt; ${id} --apply</code></p>`;
+    out.innerHTML = html;
+  } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+$('#mksnap').onclick = async () => {
+  const message = $('#msg').value.trim();
+  if (!message) { status('메시지를 입력하세요'); $('#msg').focus(); return; }
+  $('#mksnap').disabled = true; status('스냅샷 만드는 중…');
+  try {
+    const r = await api('/api/snap', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message})});
+    $('#msg').value = '';
+    await loadLog();
+    if (r.snapshot) { await select(r.snapshot.id); status(`#${r.snapshot.id} 생성 · ${countsText(r.diff.counts)} · 새 객체 ${r.stored}`); }
+  } catch (e) { status('오류: ' + e.message); }
+  finally { $('#mksnap').disabled = false; }
+};
+$('#msg').onkeydown = e => { if (e.key === 'Enter') $('#mksnap').click(); };
+$('#reload').onclick = loadLog;
+loadLog();
+</script>
+</body>
+</html>
