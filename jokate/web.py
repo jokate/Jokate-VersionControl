@@ -220,11 +220,13 @@ def api_daemon_post(control, action: str) -> dict:
 
 
 def error_response(e: BaseException) -> tuple[int, dict]:
-    """예외 → (HTTP 코드, JSON 본문). RestoreBlocked·DaemonUnavailable 은 409."""
+    """예외 → (HTTP 코드, JSON 본문). RestoreBlocked·DaemonUnavailable·FileNotFoundError 는 409."""
     if isinstance(e, DaemonUnavailable):
         return 409, {"ok": False, "error": str(e)}
     if isinstance(e, RestoreBlocked):
         return 409, {"ok": False, "error": str(e), "dirty": list(e.dirty)}
+    if isinstance(e, FileNotFoundError):   # 객체 유실 등 — UI 는 일반 오류로 표시
+        return 409, {"ok": False, "error": str(e)}
     if isinstance(e, (NotFound, KeyError)):
         return 404, {"error": str(e)}
     if isinstance(e, ValueError):   # json.JSONDecodeError 포함

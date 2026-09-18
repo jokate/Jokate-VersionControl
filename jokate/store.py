@@ -316,12 +316,14 @@ class Store:
                                      "import jokate_bridge 실행 또는 에디터 종료")
             use_bridge = True
         sid = plan.snapshot.id
-        # 객체가 모두 있는지 먼저 확인
-        for e in plan.result.values():
-            if not self.object_path(e.sha).exists():
-                raise FileNotFoundError(f"객체 없음: {e.rel} ({e.sha[:12]})")
         to_write = [rel for rel, e in plan.result.items()
                     if plan.current.get(rel) is None or plan.current[rel].sha != e.sha]
+        # 실제로 쓸 항목의 객체만 확인한다 (현재 상태 그대로 유지되는 항목은
+        # 아직 객체가 없을 수 있다 — 부분 롤백에서 수정만 하고 스냅샷 안 한 애셋)
+        for rel in to_write:
+            e = plan.result[rel]
+            if not self.object_path(e.sha).exists():
+                raise FileNotFoundError(f"객체 없음: {e.rel} ({e.sha[:12]})")
         to_delete = [rel for rel in plan.current if rel not in plan.result]
         pkgs = sorted({_pkg_of(rel) for rel in to_write + to_delete})
         if use_bridge and pkgs:

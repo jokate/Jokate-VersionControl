@@ -56,7 +56,7 @@ python -m jokate daemon-stop <project>                                # 돌고 �
 - 목록 항목을 클릭하면 하단에 그 애셋의 버전 히스토리 + 버전별 썸네일(패키지 헤더의 첫 썸네일)
 - 상단 메시지 입력 + '스냅샷 만들기'(label), 왼쪽 상단 '현재 변경사항' 패널(HEAD 대비 아직 올리지 않은 A/M/R/D, 30초 자동 갱신), 우클릭 메뉴로 부분 올리기·되돌리기 (아래 'UI 조작')
 - JSON API: `GET /api/log`, `GET /api/status`, `GET /api/snap/<id>`, `GET /api/asset?rel=`, `GET /api/thumb?sha=|?rel=`, `GET /api/search?q=`, `GET /api/restore/<id>[?asset=]`, `POST /api/snap {message, only?:[rel]}`, `POST /api/restore/<id> {assets?:[rel], discard_dirty?:bool}`
-- `POST /api/restore/<id>` 는 plan_restore→apply_restore 실행. 성공 `{ok:true, safety, result, written, deleted}`; 에디터 dirty·브릿지 없음으로 중단되면 409 `{ok:false, error, dirty:[...]}` (`store.RestoreBlocked`), 그 외 500.
+- `POST /api/restore/<id>` 는 plan_restore→apply_restore 실행. 성공 `{ok:true, safety, result, written, deleted}`; 에디터 dirty·브릿지 없음으로 중단되면 409 `{ok:false, error, dirty:[...]}` (`store.RestoreBlocked`), 객체 유실(`FileNotFoundError`)도 409 `{ok:false, error}`, 그 외 500.
 
 ## UI 조작
 
@@ -119,6 +119,7 @@ python -m jokate daemon-stop <project>                                # 돌고 �
 - `--asset rel` 을 주면 그 애셋들만 스냅샷 시점으로, 나머지는 현재 상태 유지 (반복 가능)
 - 참조 검산: 결과 트리 각 애셋의 `/Game/` 의존성이 결과 트리·vendor·현재 디스크 어디에도 없으면 "깨질 참조", 롤백으로 사라지는 애셋을 참조하는 authored 애셋은 별도 경고
 - `--apply` 순서: ① auto 스냅샷 `롤백 직전 #<id>` (안전망, 변경 없어도 생성) ② 객체를 `Content/` 로 복사(tmp→replace) ③ 결과 트리에 없는 authored 파일 삭제 ④ label 스냅샷 `롤백: #<id>`
+- 객체 존재 검사는 실제로 디스크에 쓸 항목(복사 대상)에만 한다. 현재 상태 그대로 유지되는 항목은 객체가 없어도(수정만 하고 스냅샷 안 한 애셋) 부분 롤백이 통과한다. 대상 객체가 유실됐으면 아무것도 바꾸기 전에 `FileNotFoundError` (웹 API 409)
 - `UnrealEditor.exe` 가 실행 중이면 에디터 브릿지가 필요하다 (아래). 브릿지가 없으면 `--apply` 거부
 - 롤백도 되돌릴 수 있다: `restore <project> <안전 스냅샷 id> --apply`
 

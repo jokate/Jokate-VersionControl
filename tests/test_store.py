@@ -82,6 +82,46 @@ def test_restore_single_asset(project: Path) -> None:
     st.close()
 
 
+def test_restore_partial_keeps_unsnapshotted_asset(project: Path) -> None:
+    """부분 롤백: 수정만 하고 스냅샷 안 한 애셋(A)이 있어도 B 만 되돌릴 수 있다."""
+    content = project / "Content"
+    st = storemod.Store(cfgmod.load(project))
+    (content / "Foo" / "B.uasset").write_bytes(b"BBBB-v1")
+    st.snap("first")
+    (content / "Foo" / "B.uasset").write_bytes(b"BBBB-v2")
+    st.snap("second")
+    (content / "Foo" / "A.uasset").write_bytes(b"AAAA-dirty")   # 스냅샷에 올리지 않은 수정
+
+    plan = st.plan_restore(1, ["Foo/B.uasset"])
+    r = st.apply_restore(plan, check_editor=False)
+    assert (content / "Foo" / "B.uasset").read_bytes() == b"BBBB-v1"
+    assert (content / "Foo" / "A.uasset").read_bytes() == b"AAAA-dirty"
+    assert r.written == 1 and r.deleted == 0
+    # 결과 스냅샷의 모든 트리 항목은 객체가 실제로 존재한다
+    for e in st.tree(r.result.id).values():
+        assert st.object_path(e.sha).exists(), e.rel
+    st.close()
+
+
+def test_restore_missing_object_aborts(project: Path) -> None:
+    """되돌릴 대상의 객체가 유실되면 아무것도 바꾸기 전에 FileNotFoundError."""
+    content = project / "Content"
+    st = storemod.Store(cfgmod.load(project))
+    st.snap("first")
+    (content / "Foo" / "A.uasset").write_bytes(b"AAAA-v2")
+    st.snap("second")
+    old_sha = st.tree(1)["Foo/A.uasset"].sha
+    st.object_path(old_sha).unlink()
+
+    plan = st.plan_restore(1, ["Foo/A.uasset"])
+    with pytest.raises(FileNotFoundError) as ei:
+        st.apply_restore(plan, check_editor=False)
+    assert "객체 없음" in str(ei.value) and "Foo/A.uasset" in str(ei.value)
+    assert (content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v2"
+    assert st.head().id == 2   # 안전 스냅샷도 만들어지지 않았다
+    st.close()
+
+
 def test_restore_ref_check(project: Path) -> None:
     """결과 트리 항목의 deps 가 사라지는 애셋/없는 패키지를 가리키면 경고."""
     st = storemod.Store(cfgmod.load(project))

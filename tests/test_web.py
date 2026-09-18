@@ -213,3 +213,5 @@ def test_api_restore_apply_blocked(st: storemod.Store, monkeypatch: pytest.Monke
     assert web.error_response(KeyError("x"))[0] == 404
     assert web.error_response(ValueError("x"))[0] == 400
     assert web.error_response(RuntimeError("x"))[0] == 500
+    code, body = web.error_response(FileNotFoundError("객체 없음: Foo/A.uasset (abc)"))
+    assert code == 409 and body["ok"] is False and "객체 없음" in body["error"]
