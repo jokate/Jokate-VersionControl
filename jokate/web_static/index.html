@@ -13,6 +13,7 @@
     --a:#3ddc84; --m:#ffb547; --r:#b48cff; --d:#ff5d6c; --n:#d8c25a;
     --shadow:0 10px 30px -10px rgba(0,0,0,.6), 0 2px 6px rgba(0,0,0,.35);
     --radius:12px;
+    --left-w:380px; --changes-h:300px; --hist-h:300px; --row-pad:7px; --row-fs:13px; --thumb:28px; --ver-thumb:156px;
   }
   * { box-sizing:border-box; }
   html, body { height:100%; }
@@ -47,6 +48,11 @@
   #showNoise input { accent-color:var(--acc); }
 
   /* ---------- 통계 바 ---------- */
+  #statsWrap > .ph { display:flex; align-items:center; gap:8px; padding:6px 20px 0; }
+  #statsWrap > .ph .spacer { flex:1; }
+  #statsWrap.folded #stats { display:none; }
+  #statsMini { display:none; padding:6px 20px 0; font-size:12px; color:var(--dim); }
+  #statsWrap.folded #statsMini { display:block; }
   #stats { display:flex; gap:10px; padding:12px 20px 0; flex-wrap:wrap; }
   .stat { flex:1 1 140px; background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.015)); border:1px solid var(--line); border-radius:var(--radius); padding:10px 14px; min-width:140px; }
   .stat .l { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; }
@@ -55,14 +61,20 @@
   .stat.hot .v { background:var(--accg); -webkit-background-clip:text; background-clip:text; color:transparent; }
 
   /* ---------- 레이아웃 ---------- */
-  main { display:grid; grid-template-columns:380px 1fr; gap:12px; padding:12px 20px 20px; flex:1; min-height:0; }
-  header, #stats { flex:0 0 auto; }
+  main { display:grid; grid-template-columns:var(--left-w) 6px 1fr; gap:0 12px; padding:12px 20px 20px; flex:1; min-height:0; }
+  main.full { grid-template-columns:1fr; }
+  main.full #left, main.full #vsplit { display:none; }
+  header, #statsWrap { flex:0 0 auto; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); min-height:0; display:flex; flex-direction:column; overflow:hidden; }
   .card > .ph { display:flex; gap:8px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line); background:linear-gradient(180deg, rgba(255,255,255,.03), transparent); }
   .card > .ph b { font-size:13px; font-weight:700; }
   .card > .ph .spacer { flex:1; }
-  #left { display:flex; flex-direction:column; gap:12px; min-height:0; }
-  #changes { flex:0 1 auto; max-height:46%; }
+  .card.folded { flex:0 0 auto !important; }
+  .card.folded > :not(.ph) { display:none; }
+  button.fold { background:transparent; box-shadow:none; padding:2px 6px; font-weight:700; color:var(--dim); }
+  button.fold:hover { color:var(--fg); background:rgba(255,255,255,.06); }
+  #left { display:flex; flex-direction:column; min-height:0; }
+  #changes { flex:0 0 var(--changes-h); max-height:none; }
   #changes.hot { box-shadow:0 0 0 2px var(--a), var(--shadow); }
   #changesBody { overflow:auto; }
   #changes .sum { padding:8px 14px 4px; font-size:12px; color:var(--dim); }
@@ -73,8 +85,29 @@
   #changes td .rel, #detail td .rel { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #changes td:nth-child(4) { overflow:hidden; }
   #changes .badge { white-space:nowrap; }
-  #tlcard { flex:1 1 auto; }
+  #tlcard { flex:1 1 auto; min-height:0; }
   #timeline { overflow:auto; flex:1; padding:6px 0 12px; position:relative; }
+
+  /* ---------- 경계선(splitter) ---------- */
+  .splitter { position:relative; z-index:5; flex:0 0 auto; }
+  .splitter::after { content:""; position:absolute; background:var(--line2); }
+  .splitter.col { width:6px; cursor:col-resize; }
+  .splitter.col::after { left:2px; right:2px; top:0; bottom:0; }
+  .splitter.row { height:6px; cursor:row-resize; margin:6px 0; }
+  .splitter.row::after { top:2px; bottom:2px; left:0; right:0; }
+  .splitter:hover::after, .splitter.drag::after { background:var(--acc); }
+  .splitter:focus-visible { outline:2px solid var(--acc); outline-offset:1px; }
+  body.dragging { user-select:none; }
+  body.dragging * { transition:none !important; }
+  #hsplit { flex:0 0 auto; }
+  #histSplit { flex:0 0 auto; }
+  #detail { padding:0; display:flex; flex-direction:column; overflow:hidden; }
+  #detail > .ph { flex:0 0 auto; }
+  #detailMain { overflow:auto; flex:1 1 auto; min-height:0; }
+  #histPane { flex:0 0 var(--hist-h); overflow:auto; min-height:0; }
+  #detail.histfold #histPane { flex:0 0 auto; overflow:hidden; }
+  #detail.histfold #history > *:not(.sect) { display:none; }
+  #detail.histfold #histSplit { display:none !important; }
 
   /* ---------- 타임라인 ---------- */
   .snap { position:relative; padding:10px 14px 10px 40px; cursor:pointer; transition:background .12s; border-left:3px solid transparent; }
@@ -134,7 +167,9 @@
 
   /* ---------- 표 ---------- */
   table { border-collapse:separate; border-spacing:0; width:100%; margin:6px 0 12px; }
-  td, th { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); font-size:13px; }
+  td, th { text-align:left; padding:var(--row-pad) 10px; border-bottom:1px solid var(--line); font-size:var(--row-fs); }
+  .th28 { width:var(--thumb); height:var(--thumb); }
+  body.nothumb td.tn, body.nothumb th.tn { display:none; }
   th { color:var(--dim); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.05em; position:sticky; top:0; background:var(--panel); z-index:1; }
   th.cb, td.cb { width:30px; padding-right:0; }
   td.cb input, th.cb input { accent-color:var(--acc); }
@@ -150,7 +185,6 @@
   .hint { font-size:12px; color:var(--dim2); }
 
   /* ---------- 상세 ---------- */
-  #detail { overflow:auto; padding:0; }
   #detail .empty { height:100%; display:grid; place-items:center; color:var(--dim); text-align:center; padding:40px; }
   #detail .empty .ico { font-size:44px; margin-bottom:10px; opacity:.6; }
   .dhead { padding:16px 20px 12px; border-bottom:1px solid var(--line); background:linear-gradient(180deg, rgba(108,140,255,.07), transparent); }
@@ -168,13 +202,13 @@
 
   /* ---------- 버전 히스토리 ---------- */
   .versions { display:flex; gap:12px; overflow-x:auto; padding:8px 2px 12px; }
-  .ver { flex:0 0 172px; background:var(--panel2); border:1px solid var(--line); border-radius:12px; padding:8px; font-size:12px; cursor:context-menu; transition:transform .12s, border-color .12s, box-shadow .12s; }
+  .ver { flex:0 0 calc(var(--ver-thumb) + 16px); background:var(--panel2); border:1px solid var(--line); border-radius:12px; padding:8px; font-size:12px; cursor:context-menu; transition:transform .12s, border-color .12s, box-shadow .12s; }
   .ver:hover { transform:translateY(-2px); border-color:var(--line2); box-shadow:var(--shadow); }
   .ver.changed { border-color:rgba(255,181,71,.5); }
-  .ver .th { position:relative; width:156px; height:156px; border-radius:9px; overflow:hidden; background:
+  .ver .th { position:relative; width:var(--ver-thumb); height:var(--ver-thumb); border-radius:9px; overflow:hidden; background:
       linear-gradient(45deg,#0d1017 25%,transparent 25%,transparent 75%,#0d1017 75%),linear-gradient(45deg,#0d1017 25%,#131722 25%,#131722 75%,#0d1017 75%);
       background-size:16px 16px; background-position:0 0,8px 8px; margin-bottom:8px; display:grid; place-items:center; }
-  .ver img { width:156px; height:156px; object-fit:contain; display:block; }
+  .ver img { width:var(--ver-thumb); height:var(--ver-thumb); object-fit:contain; display:block; }
   .ver .nothumb { color:var(--dim2); font-size:12px; }
   .ver .tag { position:absolute; top:6px; left:6px; }
   .ver .vid { font-weight:700; }
@@ -213,6 +247,17 @@
   #ctx .sep { border-top:1px solid var(--line); margin:5px 4px; }
   @keyframes pop { from { transform:scale(.96) translateY(-3px); } to { transform:none; } }
 
+  /* ---------- 보기 옵션 메뉴 ---------- */
+  #viewMenu { display:none; position:fixed; z-index:50; width:230px; background:rgba(23,29,41,.96); backdrop-filter:blur(12px); border:1px solid var(--line2); border-radius:11px; box-shadow:var(--shadow); padding:10px; font-size:12px; }
+  #viewMenu .vsec { margin-bottom:10px; }
+  #viewMenu .vsec:last-child { margin-bottom:0; }
+  #viewMenu .vlabel { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px; }
+  #viewMenu .vrow { display:flex; gap:4px; }
+  #viewMenu .vrow button { flex:1; padding:5px 4px; font-size:11px; }
+  #viewMenu .vrow button.on { background:var(--accg); color:#fff; box-shadow:none; }
+  #viewMenu label { display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none; }
+  #viewMenu #resetLayout { width:100%; margin-top:2px; }
+
   /* ---------- 모달 ---------- */
   #modal { display:none; position:fixed; inset:0; z-index:40; background:rgba(5,7,12,.6); backdrop-filter:blur(6px); align-items:center; justify-content:center; }
   #modalBox { background:var(--panel); border:1px solid var(--line2); border-radius:16px; width:min(800px, 92vw); max-height:88vh; overflow:auto; padding:20px 24px; box-shadow:0 30px 80px -20px rgba(0,0,0,.8); animation:rise .16s ease-out; }
@@ -239,9 +284,11 @@
     body { overflow-y:auto; min-height:100%; }
     header { position:static; }
     header input { flex-basis:100%; max-width:none; order:5; }
-    main { grid-template-columns:1fr; height:auto; flex:0 0 auto; }
+    main, main.full { grid-template-columns:1fr; height:auto; flex:0 0 auto; }
+    #vsplit { display:none; }
+    #left { display:block; }
     .card { max-height:70vh; }
-    #changes { max-height:50vh; }
+    #changes { max-height:50vh; height:auto; }
     #tlcard { max-height:60vh; }
     #detail { max-height:none; }
   }
@@ -258,31 +305,53 @@
   <button id="mksnap">스냅샷 만들기</button>
   <button id="reload" class="ghost">새로고침</button>
   <label id="showNoise"><input type="checkbox" id="showNoiseCb"> 리세이브 스냅샷 보기</label>
+  <button id="viewBtn" class="ghost small">보기</button>
   <span class="pill" id="dchip">…</span>
   <button id="dstop" class="ghost small" style="display:none">종료</button>
   <span id="status"></span>
 </header>
-<div id="stats">
-  <div class="stat hot"><div class="l">올릴 변경</div><div class="v" id="stChanges">–</div></div>
-  <div class="stat"><div class="l">스냅샷</div><div class="v" id="stSnaps">–</div></div>
-  <div class="stat"><div class="l">추적 애셋</div><div class="v" id="stAssets">–</div></div>
-  <div class="stat"><div class="l">저장소</div><div class="v"><span id="stStore">–</span><button id="pruneBtn" class="ghost small mini" title="오래된 자동 스냅샷과 참조 없는 객체 정리">정리</button></div></div>
-  <div class="stat"><div class="l">마지막 스냅샷</div><div class="v" id="stLast">–</div></div>
-</div>
-<main>
+<section id="statsWrap">
+  <div class="ph"><span class="spacer"></span><button class="fold" data-fold="stats" title="요약 접기/펼치기">▾</button></div>
+  <div id="stats">
+    <div class="stat hot"><div class="l">올릴 변경</div><div class="v" id="stChanges">–</div></div>
+    <div class="stat"><div class="l">스냅샷</div><div class="v" id="stSnaps">–</div></div>
+    <div class="stat"><div class="l">추적 애셋</div><div class="v" id="stAssets">–</div></div>
+    <div class="stat"><div class="l">저장소</div><div class="v"><span id="stStore">–</span><button id="pruneBtn" class="ghost small mini" title="오래된 자동 스냅샷과 참조 없는 객체 정리">정리</button></div></div>
+    <div class="stat"><div class="l">마지막 스냅샷</div><div class="v" id="stLast">–</div></div>
+  </div>
+  <div id="statsMini"></div>
+</section>
+<main id="main">
   <div id="left">
     <div id="changes" class="card" data-list="changes">
-      <div class="ph"><b>현재 변경사항</b><span class="selcount"></span><span class="spacer"></span><button id="reloadStatus" class="ghost small">새로고침</button></div>
+      <div class="ph"><b>현재 변경사항</b><span class="selcount"></span><span class="spacer"></span><button id="reloadStatus" class="ghost small">새로고침</button><button class="fold" data-fold="changes" title="접기/펼치기">▾</button></div>
       <div id="changesBody"><p class="dim" style="padding:12px 14px">불러오는 중…</p></div>
     </div>
+    <div id="hsplit" class="splitter row" tabindex="0" role="separator" aria-orientation="horizontal" aria-label="변경사항/타임라인 경계선"></div>
     <div id="tlcard" class="card">
-      <div class="ph"><b>타임라인</b><input id="q" placeholder="애셋·클래스·메시지 검색  /" maxlength="80"><button id="qclear" class="ghost small" style="display:none" title="검색 해제 (Esc)">✕</button><span class="hint" id="qinfo">라벨 = 밝은 점 · 자동 = 흐린 점</span></div>
+      <div class="ph"><b>타임라인</b><input id="q" placeholder="애셋·클래스·메시지 검색  /" maxlength="80"><button id="qclear" class="ghost small" style="display:none" title="검색 해제 (Esc)">✕</button><span class="hint" id="qinfo">라벨 = 밝은 점 · 자동 = 흐린 점</span><button class="fold" data-fold="tlcard" title="접기/펼치기">▾</button></div>
       <div id="timeline"></div>
     </div>
   </div>
-  <div id="detail" class="card" data-list="detail"><div class="empty"><div><div class="ico">🕘</div>왼쪽 타임라인에서 스냅샷을 선택하세요</div></div></div>
+  <div id="vsplit" class="splitter col" tabindex="0" role="separator" aria-orientation="vertical" aria-label="왼쪽 열 경계선"></div>
+  <div id="detail" class="card">
+    <div class="ph" id="detailHead"><b>상세</b><span class="spacer"></span><button id="fullBtn" class="ghost small" title="크게 보기 (f)">⤢</button></div>
+    <div id="detailMain" data-list="detail"><div class="empty"><div><div class="ico">🕘</div>왼쪽 타임라인에서 스냅샷을 선택하세요</div></div></div>
+    <div id="histSplit" class="splitter row" tabindex="0" role="separator" aria-orientation="horizontal" aria-label="버전 히스토리 경계선" style="display:none"></div>
+    <div id="histPane" style="display:none"><div id="history"></div></div>
+  </div>
 </main>
 <div id="ctx"></div>
+<div id="viewMenu">
+  <div class="vsec"><div class="vlabel">목록 밀도</div><div class="vrow">
+    <button data-density="compact">촘촘</button><button data-density="normal">보통</button><button data-density="roomy">넉넉</button>
+  </div></div>
+  <div class="vsec"><div class="vlabel">버전 카드 썸네일</div><div class="vrow">
+    <button data-verthumb="96">작게</button><button data-verthumb="156">보통</button><button data-verthumb="224">크게</button>
+  </div></div>
+  <div class="vsec"><label><input type="checkbox" id="optRowThumb" checked> 행 썸네일 표시</label></div>
+  <div class="vsec"><button id="resetLayout" class="ghost small">레이아웃 초기화</button></div>
+</div>
 <div id="modal"><div id="modalBox"></div></div>
 <div id="toast"></div>
 <script>
@@ -383,6 +452,7 @@ async function loadInfo() {
     $('#stAssets').innerHTML = `${i.assets}<small>authored</small>`;
     $('#stStore').innerHTML = `${fmtB(i.store_bytes)}<small>${i.objects}개</small>`;
     $('#stLast').innerHTML = i.last ? `<span style="font-size:15px">${esc(i.last.time.slice(5, 16))}</span><small>#${i.last.id}</small>` : '없음';
+    if (typeof applyFold === 'function') applyFold();   // 접힌 상태면 한 줄 요약 갱신
   } catch (e) { /* 통계는 실패해도 UI 는 동작 */ }
 }
 
@@ -501,9 +571,14 @@ document.addEventListener('keydown', e => {
     if ($('#ctx').style.display === 'block') { closeMenu(); return; }
     if (modalOpen()) { closeModal(); return; }
     if ($('#q').value.trim()) { clearSearch(); if (e.target === $('#q')) $('#q').blur(); return; }
-    selectAll('changes', false); selectAll('detail', false); return;
+    if (sel.changes.size || sel.detail.size) { selectAll('changes', false); selectAll('detail', false); return; }
+    if (layout.state.full) { setFull(false); return; }
+    return;
   }
   if (e.key === '/' && !inInput && !modalOpen()) { e.preventDefault(); $('#q').focus(); $('#q').select(); return; }
+  if (e.key.toLowerCase() === 'f' && !inInput && !modalOpen() && $('#ctx').style.display !== 'block') {
+    e.preventDefault(); setFull(!layout.state.full); return;
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && !inInput && !modalOpen()) {
     e.preventDefault(); selectAll(activeList, true);
   }
@@ -704,6 +779,7 @@ async function loadStatus() {
     const rs = rows(d);
     const total = rs.length;
     $('#stChanges').innerHTML = total ? `${total}<small>${countsText(d.counts)}</small>` : '0<small>깨끗함</small>';
+    if (typeof applyFold === 'function') applyFold();   // 접힌 상태면 한 줄 요약 갱신
     if (!total) { body.innerHTML = '<div class="empty" style="padding:24px;text-align:center"><div class="dim">✓ 올릴 변경 없음</div></div>'; sel.changes.clear(); paintSel('changes'); return; }
     body.innerHTML = `<div class="sum">${pills(d.counts)} &nbsp;${badges(d.by_class)}</div>` + diffTable(d, 'changes', false, 'rel');
     bindList('changes');
@@ -745,7 +821,8 @@ function diffTable(d, listName, withClass = true, thumbBy = 'sha') {
 async function select(id) {
   selected = id; selectedRel = null; sel.detail.clear();
   document.querySelectorAll('.snap').forEach(e => e.classList.toggle('sel', +e.dataset.id === id));
-  const det = $('#detail');
+  const det = $('#detailMain');
+  histClose();
   try {
     const {snapshot: s, diff: d} = await api('/api/snap/' + id);
     det.innerHTML = `<div class="dhead"><h2><span class="id">#${s.id}</span>${esc(s.message || '자동 저장')}${d.all_noise ? ' <span class="badge noise">리세이브만</span>' : ''}</h2>
@@ -754,8 +831,7 @@ async function select(id) {
       <div class="dbody">
       <div class="sect"><h3>변경 애셋</h3><span class="hint">클릭 선택 · Shift 범위 · Ctrl 추가 · Ctrl+A 전체 · Esc 해제 · 우클릭 메뉴</span></div>
       ${diffTable(d, 'detail')}
-      <div id="restore"><button id="preview" class="ghost">⟲ 이 스냅샷 전체로 되돌리기…</button></div>
-      <div id="history"></div></div>`;
+      <div id="restore"><button id="preview" class="ghost">⟲ 이 스냅샷 전체로 되돌리기…</button></div></div>`;
     bindList('detail', tr => showHistory(tr.dataset.rel, tr, d));
     paintMatches();
     $('#preview').onclick = () => restoreFlow(id, []);
@@ -802,13 +878,22 @@ async function showMetaDiff(box, aSha, bSha) {
   box.innerHTML = h;
 }
 
+function histOpen() {
+  $('#histSplit').style.display = ''; $('#histPane').style.display = '';
+  applyFold();
+}
+function histClose() {
+  $('#histSplit').style.display = 'none'; $('#histPane').style.display = 'none';
+  $('#history').innerHTML = '';
+}
 async function showHistory(rel, tr, snapDiff) {
   selectedRel = rel;
-  document.querySelectorAll('#detail tr.row').forEach(e => e.classList.toggle('hist', e === tr));
+  document.querySelectorAll('#detailMain tr.row').forEach(e => e.classList.toggle('hist', e === tr));
+  histOpen();
   const h = $('#history');
   const head = `<div class="sect"><h3>버전 히스토리 — ${relHtml(rel)}</h3>` +
     `<button id="uediffBtn" class="ghost small" title="선택한 스냅샷의 이 애셋 버전과 직전 버전을 언리얼 diff 창으로">⇄ UE 에서 diff 열기</button>` +
-    `<span class="hint">카드 우클릭 → 되돌리기 · UE 비교</span></div>`;
+    `<span class="hint">카드 우클릭 → 되돌리기 · UE 비교</span><button class="fold" data-fold="hist" title="접기/펼치기">${layout.state.folds.hist ? '▸' : '▾'}</button></div>`;
   h.innerHTML = head + '<p class="dim">불러오는 중…</p>';
   try {
     const {versions} = await api('/api/asset?rel=' + encodeURIComponent(rel));
@@ -949,6 +1034,162 @@ async function undoRestore(safetyId, assets) {
   }
 }
 
+// ---- 레이아웃(경계선·접기·크게 보기·보기 옵션) ----
+const LAYOUT_KEY = 'jokate.layout.v1';
+const LAYOUT_DEFAULT = () => ({
+  leftW: 380, changesH: 300, histH: 300,
+  folds: {stats: false, changes: false, tlcard: false, hist: false},
+  full: false,
+  density: 'normal', verThumb: 156, rowThumb: true,
+});
+// 순수 함수: 뷰포트에 맞춰 값 범위를 clamp
+function clampLayout(state, viewport) {
+  const s = Object.assign({}, LAYOUT_DEFAULT(), state, {folds: Object.assign({}, LAYOUT_DEFAULT().folds, state && state.folds)});
+  const vw = (viewport && viewport.w) || innerWidth, vh = (viewport && viewport.h) || innerHeight;
+  s.leftW = Math.max(260, Math.min(s.leftW, Math.round(vw * 0.6)));
+  s.changesH = Math.max(80, Math.min(s.changesH, Math.round(vh * 0.75)));
+  s.histH = Math.max(80, Math.min(s.histH, Math.round(vh * 0.75)));
+  if (!['compact', 'normal', 'roomy'].includes(s.density)) s.density = 'normal';
+  if (![96, 156, 224].includes(s.verThumb)) s.verThumb = 156;
+  s.rowThumb = !!s.rowThumb;
+  s.full = !!s.full && vw > 900;
+  return s;
+}
+function loadLayout() {
+  let s = null;
+  try { s = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null'); } catch (e) { s = null; }
+  if (!s || typeof s !== 'object') s = LAYOUT_DEFAULT();
+  return clampLayout(s, {w: innerWidth, h: innerHeight});
+}
+function saveLayout() { try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout.state)); } catch (e) { /* 저장 실패는 무시 */ } }
+const layout = {state: loadLayout()};
+const DENSITY_VAL = {compact: {pad: '4px', fs: '12px'}, normal: {pad: '7px', fs: '13px'}, roomy: {pad: '10px', fs: '14px'}};
+function applyLayout() {
+  const s = layout.state, root = document.documentElement.style;
+  root.setProperty('--left-w', s.leftW + 'px');
+  root.setProperty('--changes-h', s.changesH + 'px');
+  root.setProperty('--hist-h', s.histH + 'px');
+  const d = DENSITY_VAL[s.density] || DENSITY_VAL.normal;
+  root.setProperty('--row-pad', d.pad); root.setProperty('--row-fs', d.fs);
+  root.setProperty('--ver-thumb', s.verThumb + 'px');
+  document.body.classList.toggle('nothumb', !s.rowThumb);
+  $('#main').classList.toggle('full', s.full);
+  applyFold();
+  document.querySelectorAll('#viewMenu [data-density]').forEach(b => b.classList.toggle('on', b.dataset.density === s.density));
+  document.querySelectorAll('#viewMenu [data-verthumb]').forEach(b => b.classList.toggle('on', +b.dataset.verthumb === s.verThumb));
+  $('#optRowThumb').checked = s.rowThumb;
+  document.querySelectorAll('.fold[data-fold]').forEach(b => {
+    const on = !!layout.state.folds[b.dataset.fold];
+    b.textContent = on ? '▸' : '▾';
+  });
+}
+function applyFold() {
+  const f = layout.state.folds;
+  $('#statsWrap').classList.toggle('folded', !!f.stats);
+  if (f.stats) {
+    const t = +($('#stChanges').textContent.match(/\d+/) || [0])[0] || 0;
+    const sn = $('#stSnaps').textContent, st = $('#stStore').querySelector ? $('#stStore').textContent : '';
+    $('#statsMini').textContent = `올릴 변경 ${t} · 스냅샷 ${sn} · 저장소 ${st}`;
+  }
+  $('#changes').classList.toggle('folded', !!f.changes);
+  $('#tlcard').classList.toggle('folded', !!f.tlcard);
+  $('#detail').classList.toggle('histfold', !!f.hist);
+}
+function toggleFold(name) {
+  layout.state.folds[name] = !layout.state.folds[name];
+  applyLayout(); saveLayout();
+}
+// 히스토리 헤더처럼 나중에 그려지는 토글도 잡도록 위임 방식으로 바인딩
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('.fold[data-fold]');
+  if (!b) return;
+  e.stopPropagation(); e.preventDefault(); toggleFold(b.dataset.fold);
+});
+
+function setFull(on) {
+  const vw = innerWidth; if (vw <= 900) return;
+  layout.state.full = !!on; applyLayout(); saveLayout();
+}
+$('#fullBtn').onclick = () => setFull(!layout.state.full);
+
+// ---- 드래그 경계선 ----
+function bindSplitter(el, opts) {
+  // opts: {get, set, min, max, axis:'x'|'y', step, dbl}
+  let dragging = false, startPos = 0, startVal = 0;
+  const onMove = e => {
+    if (!dragging) return;
+    const cur = opts.axis === 'x' ? e.clientX : e.clientY;
+    let v = startVal + (cur - startPos);
+    v = Math.max(opts.min(), Math.min(opts.max(), v));
+    opts.set(v); applyLayout();
+  };
+  const onUp = e => {
+    if (!dragging) return;
+    dragging = false; el.classList.remove('drag'); document.body.classList.remove('dragging');
+    try { el.releasePointerCapture(e.pointerId); } catch (er) {}
+    saveLayout();
+  };
+  el.addEventListener('pointerdown', e => {
+    dragging = true; startPos = opts.axis === 'x' ? e.clientX : e.clientY; startVal = opts.get();
+    el.classList.add('drag'); document.body.classList.add('dragging');
+    el.setPointerCapture(e.pointerId);
+  });
+  el.addEventListener('pointermove', onMove);
+  el.addEventListener('pointerup', onUp);
+  el.addEventListener('pointercancel', onUp);
+  el.addEventListener('dblclick', () => { opts.set(opts.dbl()); applyLayout(); saveLayout(); });
+  el.addEventListener('keydown', e => {
+    const step = opts.step || 16;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { opts.set(Math.max(opts.min(), opts.get() - step)); applyLayout(); saveLayout(); e.preventDefault(); }
+    else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { opts.set(Math.min(opts.max(), opts.get() + step)); applyLayout(); saveLayout(); e.preventDefault(); }
+  });
+}
+bindSplitter($('#vsplit'), {
+  axis: 'x', get: () => layout.state.leftW, set: v => layout.state.leftW = v,
+  min: () => 260, max: () => Math.round(innerWidth * 0.6), dbl: () => 380,
+});
+bindSplitter($('#hsplit'), {
+  axis: 'y', get: () => layout.state.changesH, set: v => layout.state.changesH = v,
+  min: () => 80, max: () => Math.round($('#left').getBoundingClientRect().height * 0.75), dbl: () => 300,
+});
+// histSplit 은 아래쪽(#histPane) 높이를 늘리려면 위로 드래그해야 하므로 부호를 반대로 사용 (bindSplitter 미사용, 전용 로직)
+(function fixHistSplit() {
+  let dragging = false, startPos = 0, startVal = 0;
+  const el = $('#histSplit');
+  const onMove = e => {
+    if (!dragging) return;
+    const v = Math.max(80, Math.min(Math.round(innerHeight * 0.75), startVal - (e.clientY - startPos)));
+    layout.state.histH = v; applyLayout();
+  };
+  const onUp = e => { if (!dragging) return; dragging = false; el.classList.remove('drag'); document.body.classList.remove('dragging'); try { el.releasePointerCapture(e.pointerId); } catch (er) {} saveLayout(); };
+  el.onpointerdown = e => { dragging = true; startPos = e.clientY; startVal = layout.state.histH; el.classList.add('drag'); document.body.classList.add('dragging'); el.setPointerCapture(e.pointerId); };
+  el.onpointermove = onMove; el.onpointerup = onUp; el.onpointercancel = onUp;
+  el.ondblclick = () => { layout.state.histH = 300; applyLayout(); saveLayout(); };
+  el.onkeydown = e => {
+    if (e.key === 'ArrowUp') { layout.state.histH = Math.min(Math.round(innerHeight * 0.75), layout.state.histH + 16); applyLayout(); saveLayout(); e.preventDefault(); }
+    else if (e.key === 'ArrowDown') { layout.state.histH = Math.max(80, layout.state.histH - 16); applyLayout(); saveLayout(); e.preventDefault(); }
+  };
+})();
+
+// ---- 보기 옵션 메뉴 ----
+function openViewMenu() {
+  const m = $('#viewMenu'), btn = $('#viewBtn');
+  const r = btn.getBoundingClientRect();
+  m.style.display = 'block';
+  m.style.left = Math.max(0, Math.min(r.left, innerWidth - 240)) + 'px';
+  m.style.top = (r.bottom + 6) + 'px';
+}
+function closeViewMenu() { $('#viewMenu').style.display = 'none'; }
+$('#viewBtn').onclick = e => { e.stopPropagation(); $('#viewMenu').style.display === 'block' ? closeViewMenu() : openViewMenu(); };
+document.addEventListener('mousedown', e => { if (!$('#viewMenu').contains(e.target) && e.target !== $('#viewBtn')) closeViewMenu(); });
+document.querySelectorAll('#viewMenu [data-density]').forEach(b => b.onclick = () => { layout.state.density = b.dataset.density; applyLayout(); saveLayout(); });
+document.querySelectorAll('#viewMenu [data-verthumb]').forEach(b => b.onclick = () => { layout.state.verThumb = +b.dataset.verthumb; applyLayout(); saveLayout(); });
+$('#optRowThumb').onchange = e => { layout.state.rowThumb = e.target.checked; applyLayout(); saveLayout(); };
+$('#resetLayout').onclick = () => { layout.state = LAYOUT_DEFAULT(); applyLayout(); saveLayout(); closeViewMenu(); };
+
+window.addEventListener('resize', () => { layout.state = clampLayout(layout.state, {w: innerWidth, h: innerHeight}); applyLayout(); saveLayout(); });
+applyLayout();
+
 // ---- 헤더 ----
 $('#mksnap').onclick = async () => {
   const message = $('#msg').value.trim();
@@ -1019,7 +1260,7 @@ async function openFromQuery() {
     const tr = listRows('detail').find(r => r.dataset.rel === asset) || null;
     if (tr) { sel.detail.clear(); sel.detail.add(asset); paintSel('detail'); }
     await showHistory(asset, tr);
-    $('#history').scrollIntoView({block: 'start'});
+    $('#histPane').scrollTop = 0;
   } else if (asset) status('스냅샷이 없어 히스토리를 열 수 없음: ' + asset);
 }
 $('#pruneBtn').onclick = () => pruneFlow();
