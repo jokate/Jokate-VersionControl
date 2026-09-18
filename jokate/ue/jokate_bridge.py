@@ -11,7 +11,9 @@ op 'reload' : args.discard_dirty 가 아니고 dirty 대상이 있으면 {ok:fal
 
 콘텐츠 브라우저 애셋 우클릭 → 'Jokate' 서브메뉴 (올리기 / 마지막 스냅샷으로 되돌리기 / 히스토리·변경사항 웹).
 HTTP 는 반드시 백그라운드 스레드에서: 되돌리기 요청은 서버가 이 브릿지(같은 에디터 틱)에 dirty/reload 를
-물어보므로 게임 스레드에서 동기로 부르면 데드락. 결과는 _RESULTS 큐 → _tick 에서 unreal.log 로 보고.
+물어보므로 게임 스레드에서 동기로 부르면 데드락. 결과는 _RESULTS 큐 → _tick 에서 unreal.log + 모달 창.
+되돌리기 흐름: 메뉴 → (워커) head_id + restore_preview → (틱) 드라이런 확인창 YES/NO → (워커) restore POST
+→ (틱) 완료 창 / 409 면 '저장 안 한 변경을 버릴까요?' 확인 후 discard_dirty 재요청. 모달은 틱에서만 띄운다.
 """
 import json
 import os
@@ -45,9 +47,12 @@ CONTENT_DIR = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_co
 BRIDGE_DIR = os.path.join(_project_dir, ".jokate", "bridge")
 _last_poll = 0.0
 _tick_handle = None
-_RESULTS = queue.Queue()  # (level, message) — 워커 스레드가 넣고 _tick 이 게임 스레드에서 로그
+_RESULTS = queue.Queue()  # (kind, payload) — 워커 스레드가 넣고 _tick(게임 스레드)이 로그/모달 처리
 _menu_registered = False
+_dialog_open = False  # 모달이 떠 있는 동안 큐 처리 재진입 금지
 SERVE_HINT = "먼저 python -m jokate serve <프로젝트> 를 실행하세요"
+DEAD_DAEMON = "데몬이 꺼져 있습니다 — start.bat 을 실행하거나 에디터를 다시 시작하세요"
+RESTORE_TITLE = "Jokate 되돌리기"
 
 
 # ---- 콘텐츠 브라우저 메뉴 ----
@@ -66,15 +71,27 @@ def _report(level, msg):
     _RESULTS.put((level, msg))
 
 
+def _alert(title, msg, warn=True):
+    """게임 스레드에서 OK 창 + 로그."""
+    _RESULTS.put(("alert", {"title": title, "text": msg, "warn": warn}))
+
+
 def _run_bg(fn, *args):
     def work():
         try:
             fn(*args)
         except _client.ConnectionError as e:
-            _report("warn", "[jokate] %s — %s" % (SERVE_HINT, e))
+            _alert("Jokate", "%s\n(%s)" % (DEAD_DAEMON, e))
         except Exception:  # noqa: BLE001
             _report("warn", "[jokate] 오류:\n" + traceback.format_exc())
     threading.Thread(target=work, daemon=True).start()
+
+
+def _msg_box(title, text, yes_no=False):
+    """모달 창 — 반드시 게임 스레드(_tick)에서만 호출."""
+    kind = unreal.AppMsgType.YES_NO if yes_no else unreal.AppMsgType.OK
+    ret = unreal.EditorDialog.show_message(title, text, kind)
+    return bool(yes_no and ret == unreal.AppReturnType.YES)
 
 
 def _do_snap(base, names, rels):
@@ -83,26 +100,36 @@ def _do_snap(base, names, rels):
     if code == 200 and j.get("snapshot"):
         _report("log", "[jokate] 스냅샷 #%s 생성 (%d개)" % (j["snapshot"]["id"], len(rels)))
     elif code == 200:
-        _report("log", "[jokate] 변경 없음 — 스냅샷을 만들지 않음")
+        _alert("Jokate 올리기", "변경 없음 — 스냅샷을 만들지 않았습니다.")
     else:
-        _report("warn", "[jokate] 올리기 실패 %s: %s" % (code, j.get("error", j)))
+        _alert("Jokate 올리기", "올리기 실패 %s: %s" % (code, j.get("error", j)))
 
 
-def _do_restore(base, rels):
+def _do_preview(base, rels):
+    """워커 스레드: HEAD + 드라이런 → 확인창 요청을 큐에 넣는다 (적용하지 않음)."""
     sid = _client.head_id(base)
     if sid is None:
-        _report("warn", "[jokate] 스냅샷이 없어 되돌릴 수 없음")
+        _alert(RESTORE_TITLE, "스냅샷이 없어 되돌릴 수 없습니다.")
         return
-    code, j = _client.restore_assets(base, sid, rels)
+    code, j = _client.restore_preview(base, sid, rels)
+    if code != 200:
+        _alert(RESTORE_TITLE, "되돌리기 미리보기 실패 %s: %s" % (code, (j or {}).get("error", j)))
+        return
+    _RESULTS.put(("confirm_restore", {"base": base, "sid": sid, "rels": rels, "preview": j}))
+
+
+def _do_restore(base, sid, rels, discard_dirty=False):
+    """워커 스레드: 실제 적용."""
+    code, j = _client.restore_assets(base, sid, rels, discard_dirty=discard_dirty)
+    j = j or {}
     if code == 200 and j.get("ok"):
-        _report("log", "[jokate] 롤백 완료 #%s (안전 스냅샷 #%s, 복사 %s, 삭제 %s)" % (
-            j.get("result", {}).get("id"), j.get("safety", {}).get("id"), j.get("written"), j.get("deleted")))
+        _RESULTS.put(("restore_done", {"text": _client.format_result(j)}))
+    elif code == 409 and j.get("dirty") and not discard_dirty:
+        _RESULTS.put(("confirm_dirty", {"base": base, "sid": sid, "rels": rels, "body": j}))
     elif code == 409:
-        dirty = j.get("dirty") or []
-        _report("warn", "[jokate] 되돌리기 차단: %s\n  저장 안 된 패키지 %d개:\n    %s\n  저장 후 다시 시도" % (
-            j.get("error", "dirty"), len(dirty), "\n    ".join(dirty) or "-"))
+        _alert(RESTORE_TITLE, _client.format_blocked(j))
     else:
-        _report("warn", "[jokate] 되돌리기 실패 %s: %s" % (code, j.get("error", j)))
+        _alert(RESTORE_TITLE, "되돌리기 실패 %s: %s" % (code, j.get("error", j)))
 
 
 def _open_web(asset_rel=None, view=None):
@@ -126,15 +153,15 @@ def _action(kind):
         unreal.log("[jokate] 올리는 중… (%d개)" % len(rels))
         _run_bg(_do_snap, base, names, rels)
     elif kind == "restore":
-        unreal.log("[jokate] 마지막 스냅샷 상태로 되돌리는 중… (%d개) — 저장 안 된 변경이 있으면 차단됩니다" % len(rels))
-        _run_bg(_do_restore, base, rels)
+        unreal.log("[jokate] 되돌리기 미리보기를 불러오는 중… (%d개)" % len(rels))
+        _run_bg(_do_preview, base, rels)
     elif kind == "history":
         _open_web(asset_rel=rels[0])
 
 
 MENU_ITEMS = [
     ("snap", "선택한 애셋 올리기(스냅샷)", "선택한 애셋만 부분 스냅샷으로 올립니다"),
-    ("restore", "선택한 애셋을 마지막 스냅샷 상태로 되돌리기", "저장 안 된 변경이 있으면 차단(로그 참고)"),
+    ("restore", "선택한 애셋을 마지막 스냅샷 상태로 되돌리기", "무엇이 바뀌는지 확인창을 먼저 띄웁니다"),
     ("history", "히스토리 열기(웹)", "첫 번째 선택 애셋의 버전 히스토리를 브라우저로"),
     ("status", "현재 변경사항 보기(웹)", "HEAD 대비 올리지 않은 변경"),
 ]
@@ -259,6 +286,57 @@ def _handle_request():
     unreal.log("[jokate] %s → ok=%s" % (op, resp.get("ok")))
 
 
+def _handle_result(kind, payload):
+    """게임 스레드에서 워커 결과 하나를 처리 (모달은 여기서만 띄운다)."""
+    if kind == "alert":
+        text = payload["text"]
+        (unreal.log_warning if payload.get("warn", True) else unreal.log)("[jokate] " + text)
+        _msg_box(payload.get("title") or "Jokate", text)
+    elif kind == "confirm_restore":
+        preview, sid = payload["preview"], payload["sid"]
+        if _client.preview_change_count(preview) == 0:
+            unreal.log("[jokate] 이미 마지막 스냅샷 상태")
+            _msg_box(RESTORE_TITLE, "이미 마지막 스냅샷 상태입니다 — 되돌릴 변경이 없습니다.")
+            return
+        if _msg_box(RESTORE_TITLE, _client.format_preview(preview, sid), yes_no=True):
+            unreal.log("[jokate] 되돌리는 중… (%d개)" % len(payload["rels"]))
+            _run_bg(_do_restore, payload["base"], sid, payload["rels"], False)
+        else:
+            unreal.log("[jokate] 되돌리기 취소")
+    elif kind == "confirm_dirty":
+        body = payload["body"]
+        unreal.log_warning("[jokate] " + _client.format_blocked(body))
+        text = _client.format_blocked(body) + "\n\n저장하지 않은 변경을 버리고 진행할까요?"
+        if _msg_box(RESTORE_TITLE, text, yes_no=True):
+            _run_bg(_do_restore, payload["base"], payload["sid"], payload["rels"], True)
+        else:
+            unreal.log("[jokate] 되돌리기 취소 — 저장 후 다시 시도하세요")
+    elif kind == "restore_done":
+        unreal.log("[jokate] " + payload["text"])
+        _msg_box(RESTORE_TITLE, payload["text"])
+    else:  # 'log' / 'warn' 문자열 메시지
+        (unreal.log_warning if kind == "warn" else unreal.log)(payload)
+
+
+def _drain_results():
+    global _dialog_open
+    if _dialog_open:  # 모달이 떠 있는 동안 재진입 금지
+        return
+    _dialog_open = True
+    try:
+        while True:
+            try:
+                kind, payload = _RESULTS.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                _handle_result(kind, payload)
+            except Exception:  # noqa: BLE001
+                unreal.log_warning("[jokate] 결과 처리 오류:\n" + traceback.format_exc())
+    finally:
+        _dialog_open = False
+
+
 def _tick(delta_seconds):
     global _last_poll
     now = time.time()
@@ -266,12 +344,7 @@ def _tick(delta_seconds):
         return
     _last_poll = now
     try:
-        while True:  # 워커 스레드 결과를 게임 스레드에서 로그
-            try:
-                level, msg = _RESULTS.get_nowait()
-            except queue.Empty:
-                break
-            (unreal.log_warning if level == "warn" else unreal.log)(msg)
+        _drain_results()
         os.makedirs(BRIDGE_DIR, exist_ok=True)
         _write_json(os.path.join(BRIDGE_DIR, "heartbeat.json"), {"ts": now})
         _handle_request()

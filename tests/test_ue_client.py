@@ -15,6 +15,26 @@ import jokate_client as jc  # noqa: E402
 CALLS: list = []
 
 
+def _e(rel, noise=False):
+    return {"rel": rel, "sha": "a", "size": 1, "cls": "Blueprint", "noise": noise}
+
+
+PREVIEW = {
+    "snapshot": {"id": 7, "message": "몬스터 밸런스"},
+    "assets": [],
+    "diff": {
+        "modified": [{"old": _e("Blueprint/BP_Monster.uasset"), "new": _e("Blueprint/BP_Monster.uasset")},
+                     {"old": _e("Blueprint/BP_Noise.uasset"), "new": _e("Blueprint/BP_Noise.uasset", True)}],
+        "added": [_e("Blueprint/BP_Back.uasset")],
+        "moved": [{"old": _e("A/Old.uasset"), "new": _e("A/New.uasset")}],
+        "deleted": [_e("Blueprint/BP_Gone.uasset")],
+        "counts": {"added": 1, "modified": 1, "resave": 1, "moved": 1, "deleted": 1},
+    },
+    "broken": [{"rel": "Blueprint/BP_Gone.uasset", "dep": "/Game/Blueprint/BP_Child"}],
+    "dependents": [{"rel": "A/Old.uasset", "dep": "/Game/Maps/Lobby"}],
+}
+
+
 class FakeApi(BaseHTTPRequestHandler):
     def log_message(self, *a):  # noqa: D102
         pass
@@ -32,6 +52,9 @@ class FakeApi(BaseHTTPRequestHandler):
             self._json(200, [{"id": 7, "message": "x"}, {"id": 3}])
         elif self.path == "/api/status":
             self._json(200, {"diff": {"counts": {"modified": 1}}})
+        elif self.path.startswith("/api/restore/"):
+            CALLS.append((self.path, None))
+            self._json(200, PREVIEW)
         else:
             self._json(404, {"ok": False, "error": "nf"})
 
@@ -78,6 +101,49 @@ def test_restore_409_then_discard(base):
     code, j = jc.restore_assets(base, 7, ["Foo/A.uasset"], discard_dirty=True)
     assert code == 200 and j["result"]["id"] == 9
     assert CALLS[-1][0] == "/api/restore/7" and CALLS[-1][1]["discard_dirty"] is True
+
+
+def test_restore_preview_roundtrip(base):
+    CALLS.clear()
+    code, j = jc.restore_preview(base, 7, ["Blueprint/BP_Monster.uasset", "A/Old.uasset"])
+    assert code == 200 and j["snapshot"]["id"] == 7
+    path = CALLS[-1][0]
+    assert path.startswith("/api/restore/7?")
+    assert path.count("asset=") == 2 and "Blueprint%2FBP_Monster.uasset" in path
+
+
+def test_preview_change_count():
+    assert jc.preview_change_count(PREVIEW) == 5  # 수정2(리세이브 포함) + 부활1 + 이동1 + 삭제1
+    assert jc.preview_change_count({"diff": {"counts": {}}}) == 0
+
+
+def test_format_preview():
+    text = jc.format_preview(PREVIEW, 7)
+    lines = text.splitlines()
+    assert lines[0] == "#7 몬스터 밸런스 상태로 되돌립니다"
+    assert lines[1] == "수정 1 · 부활 1 · 이동 1 · 삭제 1 · 리세이브만 1"
+    assert "M Blueprint/BP_Monster.uasset" in lines
+    assert "M Blueprint/BP_Noise.uasset (리세이브만)" in lines
+    assert "A Blueprint/BP_Back.uasset" in lines
+    assert "R A/Old.uasset → A/New.uasset" in lines
+    assert "D Blueprint/BP_Gone.uasset" in lines
+    assert "참조 경고 2건" in lines
+    assert lines[-1] == "되돌리기 직전 안전 스냅샷이 자동 생성됩니다."
+
+
+def test_format_preview_row_limit():
+    text = jc.format_preview(PREVIEW, 7, max_rows=2)
+    assert "… 외 3개" in text.splitlines()
+    assert "D Blueprint/BP_Gone.uasset" not in text
+
+
+def test_format_blocked_and_result():
+    body = {"ok": False, "error": "dirty 패키지 있음", "dirty": ["/Game/Foo/A%d" % i for i in range(12)]}
+    b = jc.format_blocked(body)
+    assert "dirty 패키지 있음" in b and "저장 안 된 패키지 12개:" in b
+    assert b.count("/Game/Foo/A") == 10 and "… 외 2개" in b
+    r = jc.format_result({"ok": True, "result": {"id": 9}, "safety": {"id": 8}, "written": 3, "deleted": 1})
+    assert r == "롤백 완료 #9 · 안전 스냅샷 #8 · 복사 3 · 삭제 1"
 
 
 def test_connection_refused():

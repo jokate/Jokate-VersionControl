@@ -75,10 +75,11 @@ python -m jokate daemon-stop <project>                                # 돌고 �
 `bridge-install` 후 에디터를 재시작하면(또는 Python 콘솔에서 `import jokate_bridge`) 콘텐츠 브라우저 애셋 우클릭 메뉴에 `Jokate` 서브메뉴가 생긴다. `python -m jokate serve <project>` 가 떠 있어야 동작한다 (안 떠 있으면 Output Log 에 '먼저 python -m jokate serve <프로젝트> 를 실행' 경고).
 
 - `선택한 애셋 올리기(스냅샷)`: 선택 애셋만 부분 스냅샷. 메시지는 `에디터에서 올림: <애셋명> n개` 자동
-- `선택한 애셋을 마지막 스냅샷 상태로 되돌리기`: `POST /api/restore/<HEAD>` (드라이런 없음, 안전 스냅샷은 서버가 자동 생성). 에디터에 저장 안 한 대상이 있으면 409 로 차단 → Output Log 에 dirty 목록과 '저장 후 다시 시도'. 성공 시 '롤백 완료 #N'
+- `선택한 애셋 올리기(스냅샷)`은 성공하면 로그만, 실패·변경 없음이면 알림 창
+- `선택한 애셋을 마지막 스냅샷 상태로 되돌리기`: 웹과 같은 안전장치 — 먼저 `GET /api/restore/<HEAD>?asset=…` 드라이런을 받아 `Jokate 되돌리기` 확인창(변경 요약 `수정 n · 부활 n · 이동 n · 삭제 n`, 애셋 목록 최대 12줄, 참조 경고, '되돌리기 직전 안전 스냅샷이 자동 생성됩니다')을 띄운다. 바뀔 게 없으면 '이미 마지막 스냅샷 상태입니다' 창만. YES → `POST /api/restore/<HEAD>` → '롤백 완료 #N · 안전 스냅샷 #M · 복사 a · 삭제 b' 창. 409(저장 안 한 변경)면 dirty 목록과 함께 '저장하지 않은 변경을 버리고 진행할까요?' 를 묻고 YES 면 `discard_dirty` 로 재요청. 데몬이 꺼져 있으면 'start.bat 을 실행하거나 에디터를 다시 시작하세요' 창
 - `히스토리 열기(웹)`: 브라우저로 `/?asset=<rel>` · `현재 변경사항 보기(웹)`: `/?view=status`
 - 구현: `jokate/ue/jokate_client.py`(urllib 만, `unreal` 미사용 → `tests/test_ue_client.py` 로 가짜 서버 왕복 테스트) + `jokate_bridge.py` 의 `unreal.ToolMenuEntryScript` 서브클래스. 두 파일 모두 `bridge-install` 이 `Content/Python/` 에 복사
-- HTTP 는 항상 `threading.Thread` 에서 보내고 결과는 큐 → 기존 `_tick` 에서 `unreal.log` 로 보고. 게임 스레드에서 동기로 부르면 서버가 같은 에디터의 브릿지(dirty/reload)를 기다리므로 데드락
+- HTTP 는 항상 `threading.Thread` 에서 보내고 결과는 큐 → 기존 `_tick` 에서 `unreal.log` + 모달 창(`unreal.EditorDialog.show_message`, `AppMsgType.OK/YES_NO`). 게임 스레드에서 동기로 부르면 서버가 같은 에디터의 브릿지(dirty/reload)를 기다리므로 데드락. 모달은 틱(게임 스레드)에서만 띄우고 창이 떠 있는 동안 큐 처리는 재진입하지 않는다
 - 선택 애셋 → 패키지명 → `package_to_rel` (`/Game/A/B` → `A/B.uasset`, 디스크에 `.umap` 이 있으면 `.umap`). `/Game` 밖은 무시
 
 ## 자동 스냅샷 (watch)
