@@ -22,14 +22,27 @@
 ## 스냅샷 저장소
 
 - `.jokate/store/objects/<sha[:2]>/<sha>` — 원본 그대로(압축 없음), 내용주소(blake2b-256). 같은 내용은 한 번만 저장
-- `.jokate/index.sqlite` — `snapshots(id, parent, kind, message, ts)`, `tree(snapshot_id, rel, sha, size, cls, deps, noise)`
+- `.jokate/index.sqlite` — `snapshots(id, parent, kind, message, ts, uploaded)`, `tree(snapshot_id, rel, sha, size, cls, deps, noise)`, `baseline(rel, sha, size, cls, deps)`, `store_meta(k, v)`
 - 변경 판단은 mtime 이 아니라 sha 비교. 이동은 "sha 동일 + 경로 변경" 으로 잡는다
 - vendor 등급은 스냅샷에 포함하지 않는다
 - 옛 DB 는 `Store` 를 열 때 `ALTER TABLE tree ADD COLUMN noise` 로 자동 마이그레이션(기존 행 0)
 
+## baseline 과 자동 기록
+
+'올린 것'과 '자동 기록'은 다른 축이다 (git 의 index/commit 대 autosave).
+
+- `baseline(rel, sha, size, cls, deps)` — 사용자가 **마지막으로 올린(인정한) 상태**. `snapshots.uploaded` 는 그 스냅샷에서 **이번에 올린 항목**만 담는 JSON(`{rel, state, old_sha, new_sha, old_rel?, size, cls, noise}`)
+- `status()` = baseline → 작업 트리 Diff. 자동 스냅샷(`kind=auto`)과 롤백은 baseline 을 건드리지 않으므로, 데몬이 5초 뒤 자동 기록을 남겨도 '올리지 않은 변경'은 그대로 남는다
+- `upload(message, only=[rel])` — 고른 변경만 baseline 에 반영(삭제는 baseline 에서 제거, 이동은 old/new 중 하나만 골라도 쌍으로). 스냅샷은 항상 **전체 작업 트리**로 찍고(HEAD 와 트리가 같아도 생성) `uploaded` 에 올린 항목을 기록한다. 올릴 게 없으면 `None`
+- `show`/`log` 는 `uploaded` 가 있으면 그것을 Diff 로 보여주고(직전 대비가 아니라 '이번에 올린 것'), 없으면 직전 스냅샷 대비
+- `squash` 는 묶이는 스냅샷들의 `uploaded` 를 rel 기준으로 합친다(첫 `old_sha` + 마지막 `new_sha`, 결과가 같아지면 제외)
+- `gc`/`prune` 은 baseline 이 참조하는 sha 의 객체·meta 사이드카를 절대 지우지 않는다
+- `revert_to_baseline([rel])` — 고른 애셋을 마지막으로 올린 상태로 되돌리기. `plan_restore` 와 같은 경로(안전 스냅샷·dirty 차단·reload·참조 검산)를 쓰고 '대상 트리'만 baseline 으로 바꾼다
+- 마이그레이션: baseline 이 비어 있고 `store_meta.baseline_ready` 가 없으면 가장 최근 label 스냅샷(없으면 HEAD)의 트리로 한 번 채운다. `snapshots.uploaded` 는 `ALTER TABLE` 로 추가
+
 ## 부분 스냅샷과 롤백
 
-- `snap(..., only=[rel])` — 지정한 애셋만 새 상태로 올리고 나머지는 HEAD 유지
+- `snap(..., kind=...)` 의 `only=[rel]` — 지정한 애셋만 새 상태로 올리고 나머지는 HEAD 유지(내부용: 롤백의 안전·결과 스냅샷). `kind` 없이 메시지를 주면 `upload` 로 넘어간다
 - `plan_restore(sid, assets)` 는 드라이런: 되돌릴 애셋(M 수정 되돌림 / A 부활 / R 이동 / D 삭제) + 클래스별 집계 + 참조 검산만 만든다
 - 참조 검산: 결과 트리 각 애셋의 `/Game/` 의존성이 결과 트리·vendor·현재 디스크 어디에도 없으면 "깨질 참조"(`broken`), 롤백으로 사라지는 애셋을 참조하는 authored 애셋은 `dependents` 경고
 - 에디터 파일 잠금: 에디터는 로드한 패키지의 `.uasset` 을 공유 없이 열어 둬 밖에서 덮어쓰면 `PermissionError [WinError 5]` 가 난다 → 쓰기 전에 브릿지 `release` 로 `unload_packages` 하고, 그래도 잠긴 파일이 있으면 `file_locked()` 사전 검사에서 아무것도 쓰지 않고 `RestoreBlocked(locked=[...])`. `tmp→replace` 는 `PermissionError` 시 0.2초 간격 5회 재시도, 성공·실패 무관하게 `finally` 에서 이번 실행의 `*.jokate-tmp` 삭제. 오래된(10분+) 잔여물은 데몬 시작·CLI restore 시작 때 `cleanup_tmp_files(cfg)` 로 정리

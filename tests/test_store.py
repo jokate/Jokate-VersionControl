@@ -101,7 +101,8 @@ def test_restore_partial_keeps_unsnapshotted_asset(project: Path) -> None:
         assert st.object_path(e.sha).exists(), e.rel
     # A 의 올리지 않은 수정은 롤백 뒤에도 '현재 변경사항' 으로 남는다
     d = st.status()
-    assert [n.rel for _, n in d.modified] == ["Foo/A.uasset"] and not d.added and not d.deleted
+    # (B 는 baseline 보다 옛 버전으로 되돌아갔으니 이것도 '올리지 않은 변경')
+    assert [n.rel for _, n in d.modified] == ["Foo/A.uasset", "Foo/B.uasset"] and not d.added and not d.deleted
     # 안전/결과 스냅샷의 A 는 HEAD 버전 sha 그대로(수정본 sha 아님)
     head_a = st.tree(2)["Foo/A.uasset"].sha
     assert r.safety_created is False and r.safety.id == 2
@@ -200,7 +201,7 @@ def test_cli_dry_run(project: Path, capsys: pytest.CaptureFixture) -> None:
 
 
 def test_partial_snap_and_status(project: Path) -> None:
-    """only 로 지정한 rel 만 반영, 나머지는 HEAD 유지, 객체 저장은 갱신된 것만."""
+    """only 로 지정한 rel 만 '올린 것'(baseline)에 반영. 스냅샷 트리는 항상 전체 작업 트리."""
     content = project / "Content" / "Foo"
     st = storemod.Store(cfgmod.load(project))
     st.snap("first")
@@ -213,21 +214,24 @@ def test_partial_snap_and_status(project: Path) -> None:
     assert [e.rel for e in d.added] == ["Foo/B.uasset"] and [e.rel for e in d.deleted] == ["Foo/C.uasset"]
 
     s2, d2, stored = st.snap("A만", only=["Foo\\A.uasset"])
-    assert s2 is not None and stored == 1
+    assert s2 is not None and stored == 2          # A 새 버전 + (아직 안 올린) B 객체도 보관
     assert [n.rel for _, n in d2.modified] == ["Foo/A.uasset"] and not d2.added and not d2.deleted
     t2 = st.tree(s2.id)
-    assert set(t2) == {"Foo/A.uasset", "Foo/C.uasset"}          # B 미반영, C 는 HEAD 유지
-    assert t2["Foo/C.uasset"].sha == st.tree(1)["Foo/C.uasset"].sha
+    assert set(t2) == {"Foo/A.uasset", "Foo/B.uasset"}   # 스냅샷은 전체 작업 트리
+    assert set(st.baseline()) == {"Foo/A.uasset", "Foo/C.uasset"}   # 올린 것만 baseline 에 반영
+    # 올린 뒤에도 B 추가·C 삭제는 '올리지 않은 변경' 으로 남는다
+    mid = st.status()
+    assert [e.rel for e in mid.added] == ["Foo/B.uasset"] and [e.rel for e in mid.deleted] == ["Foo/C.uasset"]
     # 선택한 것에 변경 없으면 생성 안 함
     assert st.snap("again", only=["Foo/A.uasset"])[0] is None
-    # 디스크에 없는 rel 을 only 로 → 트리에서 제거, 객체 저장 0
+    # 디스크에 없는 rel 을 only 로 → 삭제를 올림(baseline 에서 제거), 새 객체 없음
     s3, d3, stored3 = st.snap("C삭제", only=["Foo/C.uasset"])
     assert stored3 == 0 and [e.rel for e in d3.deleted] == ["Foo/C.uasset"]
-    assert set(st.tree(s3.id)) == {"Foo/A.uasset"}
+    assert set(st.tree(s3.id)) == {"Foo/A.uasset", "Foo/B.uasset"}
     rest = st.status()
     assert [e.rel for e in rest.added] == ["Foo/B.uasset"] and not rest.modified and not rest.deleted
-    with pytest.raises(KeyError):
-        st.snap("x", only=["Foo/Nope.uasset"])
+    # 올릴 변경이 없는 rel 을 골랐다 → 아무것도 올리지 않음
+    assert st.snap("x", only=["Foo/Nope.uasset"])[0] is None
     st.close()
 
 

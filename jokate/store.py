@@ -44,6 +44,17 @@ CREATE TABLE IF NOT EXISTS tree(
     PRIMARY KEY(snapshot_id, rel)
 );
 CREATE INDEX IF NOT EXISTS tree_sha ON tree(sha);
+CREATE TABLE IF NOT EXISTS baseline(
+    rel  TEXT PRIMARY KEY,
+    sha  TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    cls  TEXT NOT NULL DEFAULT '',
+    deps TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS store_meta(
+    k TEXT PRIMARY KEY,
+    v TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -116,6 +127,38 @@ class Store:
         if "noise" not in cols:
             self.db.execute("ALTER TABLE tree ADD COLUMN noise INTEGER NOT NULL DEFAULT 0")
             self.db.commit()
+        # 마이그레이션: snapshots.uploaded(이번에 사용자가 올린 항목 JSON)
+        scols = {r[1] for r in self.db.execute("PRAGMA table_info(snapshots)").fetchall()}
+        if "uploaded" not in scols:
+            self.db.execute("ALTER TABLE snapshots ADD COLUMN uploaded TEXT NOT NULL DEFAULT ''")
+            self.db.commit()
+        self._init_baseline()
+
+    # ---- baseline (사용자가 마지막으로 올린 상태) ----
+    def _init_baseline(self) -> None:
+        """옛 저장소: baseline 이 없으면 가장 최근 label 스냅샷(없으면 HEAD) 트리로 한 번 채운다."""
+        done = self.db.execute("SELECT v FROM store_meta WHERE k='baseline_ready'").fetchone()
+        n = self.db.execute("SELECT COUNT(*) FROM baseline").fetchone()[0]
+        if done or n:
+            return
+        row = self.db.execute("SELECT id FROM snapshots WHERE kind='label' ORDER BY id DESC LIMIT 1").fetchone()
+        if row is None:
+            row = self.db.execute("SELECT id FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+        if row is not None:
+            self._write_baseline(self.tree(row[0]).values(), [])
+        self.db.execute("INSERT OR REPLACE INTO store_meta(k,v) VALUES('baseline_ready','1')")
+        self.db.commit()
+
+    def baseline(self) -> dict[str, TreeEntry]:
+        rows = self.db.execute("SELECT rel,sha,size,cls,deps FROM baseline").fetchall()
+        return {r[0]: TreeEntry(r[0], r[1], r[2], r[3], json.loads(r[4])) for r in rows}
+
+    def _write_baseline(self, put, drop) -> None:
+        cur = self.db.cursor()
+        cur.executemany("DELETE FROM baseline WHERE rel=?", [(r,) for r in drop])
+        cur.executemany("INSERT OR REPLACE INTO baseline(rel,sha,size,cls,deps) VALUES(?,?,?,?,?)",
+                        [(e.rel, e.sha, e.size, e.cls, json.dumps(e.deps)) for e in put])
+        cur.execute("INSERT OR REPLACE INTO store_meta(k,v) VALUES('baseline_ready','1')")
 
     # ---- objects ----
     def object_path(self, sha: str) -> Path:
@@ -186,22 +229,69 @@ class Store:
         return {r.rel: TreeEntry(r.rel, r.sha, r.size, r.cls, r.deps) for r in self.scan_authored()}
 
     def status(self) -> Diff:
-        """HEAD 트리 → 작업 트리(디스크) Diff. 아직 스냅샷에 올리지 않은 변경."""
+        """baseline(마지막으로 올린 상태) → 작업 트리(디스크) Diff. 아직 올리지 않은 변경.
+
+        자동 스냅샷(kind=auto)은 baseline 을 건드리지 않으므로 여기 결과를 비우지 않는다.
+        """
+        base = self.baseline()
+        work = self._work_tree()
+        self._mark_noise(base, list(work.values()))  # 올리기 전에도 리세이브만인지 보이게
+        return diff_trees(base, work)
+
+    def upload(self, message: str = "", only: list[str] | None = None) -> tuple[Snapshot | None, Diff, int]:
+        """사용자가 '올리기': 고른 변경을 baseline 에 반영하고 label 스냅샷을 남긴다.
+
+        스냅샷은 항상 '전체 작업 트리'로 찍고(HEAD 와 같아도 생성) uploaded 에 이번에 올린 항목만 기록한다.
+        only 가 있으면 그 rel 들만(이동은 old/new 중 하나만 골라도 쌍으로). 올릴 게 없으면 (None, 빈 Diff, 0).
+        반환 (snapshot|None, 이번에 올린 diff, 새 객체 수).
+        """
+        base = self.baseline()
+        work = self._work_tree()
+        self._mark_noise(base, list(work.values()))
+        sel = _select_diff(diff_trees(base, work), only)
+        if sel.empty:
+            return None, sel, 0
+        items = _uploaded_items(sel)
         parent = self.head()
         old_tree = self.tree(parent.id if parent else None)
-        work = self._work_tree()
-        self._mark_noise(old_tree, list(work.values()))  # 올리기 전에도 리세이브만인지 보이게
-        return diff_trees(old_tree, work)
+        rows = [replace(e) for e in work.values()]      # 스냅샷 트리의 noise 는 직전 스냅샷 기준
+        self._mark_noise(old_tree, rows)
+        stored = 0
+        for e in rows:
+            if self.put_object(self.cfg.content / e.rel, e.sha):
+                stored += 1
+        cur = self.db.cursor()
+        cur.execute("INSERT INTO snapshots(parent,kind,message,ts,uploaded) VALUES(?,?,?,?,?)",
+                    (parent.id if parent else None, "label", message, time.time(), json.dumps(items)))
+        sid = cur.lastrowid
+        cur.executemany("INSERT INTO tree(snapshot_id,rel,sha,size,cls,deps,noise) VALUES(?,?,?,?,?,?,?)",
+                        [(sid, e.rel, e.sha, e.size, e.cls, json.dumps(e.deps), int(e.noise)) for e in rows])
+        put = [e for e in (*sel.added, *(n for _, n in sel.modified), *(n for _, n in sel.moved))]
+        drop = [e.rel for e in sel.deleted] + [o.rel for o, _ in sel.moved]
+        self._write_baseline(put, drop)
+        self.db.commit()
+        return self.get(sid), sel, stored
+
+    def uploaded_diff(self, sid: int) -> Diff | None:
+        """스냅샷에 기록된 '이번에 올린 것' → Diff. 기록이 없으면 None."""
+        row = self.db.execute("SELECT uploaded FROM snapshots WHERE id=?", (sid,)).fetchone()
+        if not row or not row[0]:
+            return None
+        return _diff_from_uploaded(json.loads(row[0]))
 
     def snap(self, message: str = "", *, kind: str | None = None,
              force: bool = False, only: list[str] | None = None) -> tuple[Snapshot | None, Diff, int]:
         """작업 트리를 스냅샷으로 저장. 반환 (snapshot|None(변경 없음), diff, 새 객체 수).
 
-        only 가 있으면 부분 스냅샷: HEAD 트리 복사본에 only 의 rel 만 디스크 상태로 갱신(디스크에 없으면 제거),
-        나머지는 HEAD 그대로. only 의 rel 이 HEAD 에도 디스크에도 없으면 KeyError.
+        kind 를 주지 않고 message 가 있으면 사용자 '올리기'(upload) 로 넘긴다(하위 호환).
+        kind 를 직접 준 호출은 내부용: only 가 있으면 부분 스냅샷 — HEAD 트리 복사본에 only 의 rel 만
+        디스크 상태로 갱신(디스크에 없으면 제거), 나머지는 HEAD 그대로. only 의 rel 이 HEAD 에도
+        디스크에도 없으면 KeyError. baseline 은 건드리지 않는다.
         """
         if kind is None:
-            kind = "label" if message else "auto"
+            if message:
+                return self.upload(message, only=only)
+            kind = "auto"
         work = self._work_tree()
         parent = self.head()
         old_tree = self.tree(parent.id if parent else None)
@@ -242,6 +332,9 @@ class Store:
         s = self.get(sid)
         if s is None:
             raise KeyError(f"snapshot {sid} 없음")
+        up = self.uploaded_diff(sid)
+        if up is not None:      # 사용자가 올린 스냅샷 → '이번에 올린 것'을 보여준다
+            return s, up
         return s, diff_trees(self.tree(s.parent), self.tree(s.id))
 
     # ---- restore ----
@@ -250,8 +343,21 @@ class Store:
         s = self.get(sid)
         if s is None:
             raise KeyError(f"snapshot {sid} 없음")
+        return self._plan_to_target(s, self.tree(sid), assets, f"스냅샷 #{sid}")
+
+    def plan_revert_to_baseline(self, assets: list[str] | None = None) -> "RestorePlan":
+        """지정한 애셋을 baseline(마지막으로 올린 상태)으로 되돌릴 계획. assets 가 없으면 전부."""
+        pseudo = Snapshot(id=0, parent=None, kind="label", message="올린 상태(baseline)", ts=time.time())
+        return self._plan_to_target(pseudo, self.baseline(), assets, "baseline")
+
+    def revert_to_baseline(self, assets: list[str] | None = None, **kw) -> "RestoreResult":
+        """계획 + 적용 한 번에 (apply_restore 의 안전 스냅샷·dirty 차단·reload 로직 그대로)."""
+        return self.apply_restore(self.plan_revert_to_baseline(assets), **kw)
+
+    def _plan_to_target(self, s: Snapshot, target_tree: dict[str, TreeEntry],
+                        assets: list[str] | None, what: str) -> "RestorePlan":
         # noise 는 '직전 스냅샷 대비' 표시라 롤백 diff 에는 무의미 → 초기화
-        target = {rel: replace(e, noise=False) for rel, e in self.tree(sid).items()}
+        target = {rel: replace(e, noise=False) for rel, e in target_tree.items()}
         recs = self.scan_authored()
         current = {r.rel: TreeEntry(r.rel, r.sha, r.size, r.cls, r.deps) for r in recs}
         if assets:
@@ -259,7 +365,7 @@ class Store:
             for a in assets:
                 rel = a.replace("\\", "/").strip("/")
                 if rel not in target and rel not in current:
-                    raise KeyError(f"{rel}: 스냅샷 #{sid} 에도 현재 트리에도 없음")
+                    raise KeyError(f"{rel}: {what} 에도 현재 트리에도 없음")
                 if rel in target:
                     result[rel] = target[rel]
                 else:
@@ -324,6 +430,7 @@ class Store:
                                      "import jokate_bridge 실행 또는 에디터 종료")
             use_bridge = True
         sid = plan.snapshot.id
+        tag = f"#{sid}" if sid else "올린 상태"
         to_write = [rel for rel, e in plan.result.items()
                     if plan.current.get(rel) is None or plan.current[rel].sha != e.sha]
         # 실제로 쓸 항목의 객체만 확인한다 (현재 상태 그대로 유지되는 항목은
@@ -364,7 +471,7 @@ class Store:
         only_before = [r for r in affected if r in work_now or r in head_tree]
         safety = None
         if only_before:
-            safety, _, _ = self.snap(f"롤백 직전 #{sid}", kind="auto", only=only_before)
+            safety, _, _ = self.snap(f"롤백 직전 {tag}", kind="auto", only=only_before)
         safety_created = safety is not None
         if safety is None:   # 되돌릴 애셋의 디스크 상태가 HEAD 그대로 → HEAD 가 곧 '롤백 직전'
             safety = head if head is not None else self.head()
@@ -415,7 +522,7 @@ class Store:
         only_after = [r for r in affected if r in work2 or r in tree2]
         result = None
         if only_after:
-            result, _, _ = self.snap(f"롤백: #{sid}", kind="label", only=only_after)
+            result, _, _ = self.snap(f"롤백: {tag}", kind="label", only=only_after)
         if result is None:   # 이론상 없음 (바뀐 게 없으면 plan.diff 가 비었다)
             result = self.head()
         return RestoreResult(safety=safety, result=result, written=written, deleted=deleted_files,
@@ -493,7 +600,10 @@ class Store:
                     "묶으면 이름 붙인 스냅샷 "
                     + ", ".join(f"#{i} ({m})".rstrip() for i, m in doomed)
                     + " 가 함께 사라진다", doomed)
-        self.db.execute("UPDATE snapshots SET kind='label', message=? WHERE id=?", (message, keep.id))
+        merged = _merge_uploaded([self.db.execute("SELECT uploaded FROM snapshots WHERE id=?", (s.id,)).fetchone()[0]
+                                  for s in snaps])
+        self.db.execute("UPDATE snapshots SET kind='label', message=?, uploaded=? WHERE id=?",
+                        (message, json.dumps(merged) if merged else "", keep.id))
         removed = self.delete_snapshots([s.id for s in snaps[:-1]])
         self.db.commit()
         self.gc()
@@ -533,6 +643,8 @@ class Store:
         if ex:
             q += " WHERE snapshot_id NOT IN (%s)" % ",".join("?" * len(ex))
         refs = {r[0] for r in self.db.execute(q, ex).fetchall()}
+        # baseline(마지막으로 올린 상태)이 가리키는 객체·사이드카는 절대 지우지 않는다
+        refs |= {r[0] for r in self.db.execute("SELECT sha FROM baseline").fetchall()}
         metas = self._gc_meta(refs, dry_run)
         if not self.objects.exists():
             return GCResult(0, 0, metas)
@@ -691,6 +803,91 @@ def _affected_rels(d: Diff) -> list[str]:
         rels.add(o.rel)
         rels.add(n.rel)
     return sorted(rels)
+
+
+def _select_diff(d: Diff, only: list[str] | None) -> Diff:
+    """pending diff 에서 only 의 rel 만 고른다(이동은 old/new 중 하나만 골라도 쌍으로)."""
+    if not only:
+        return d
+    want = {str(a).replace("\\", "/").strip("/") for a in only}
+    return Diff(
+        added=[e for e in d.added if e.rel in want],
+        modified=[(o, n) for o, n in d.modified if n.rel in want],
+        deleted=[e for e in d.deleted if e.rel in want],
+        moved=[(o, n) for o, n in d.moved if o.rel in want or n.rel in want],
+    )
+
+
+def _uploaded_items(d: Diff) -> list[dict]:
+    """이번에 올린 항목을 snapshots.uploaded 에 넣을 JSON 목록으로."""
+    items: list[dict] = []
+    for e in d.added:
+        items.append({"rel": e.rel, "state": "added", "old_sha": None, "new_sha": e.sha,
+                      "size": e.size, "old_size": 0, "cls": e.cls, "noise": False})
+    for o, n in d.modified:
+        items.append({"rel": n.rel, "state": "modified", "old_sha": o.sha, "new_sha": n.sha,
+                      "size": n.size, "old_size": o.size, "cls": n.cls, "noise": bool(n.noise)})
+    for o, n in d.moved:
+        items.append({"rel": n.rel, "old_rel": o.rel, "state": "moved", "old_sha": o.sha, "new_sha": n.sha,
+                      "size": n.size, "old_size": o.size, "cls": n.cls, "noise": False})
+    for e in d.deleted:
+        items.append({"rel": e.rel, "state": "deleted", "old_sha": e.sha, "new_sha": None,
+                      "size": e.size, "old_size": e.size, "cls": e.cls, "noise": False})
+    return items
+
+
+def _diff_from_uploaded(items: list[dict]) -> Diff:
+    d = Diff()
+    for it in items:
+        cls = it.get("cls") or ""
+        new = TreeEntry(it["rel"], it.get("new_sha") or "", int(it.get("size") or 0), cls,
+                        noise=bool(it.get("noise")))
+        old = TreeEntry(it.get("old_rel") or it["rel"], it.get("old_sha") or "",
+                        int(it.get("old_size") or 0), cls)
+        state = it.get("state")
+        if state == "added":
+            d.added.append(new)
+        elif state == "deleted":
+            d.deleted.append(old)
+        elif state == "moved":
+            d.moved.append((old, new))
+        else:
+            d.modified.append((old, new))
+    for lst in (d.added, d.deleted):
+        lst.sort(key=lambda e: e.rel)
+    for lst in (d.modified, d.moved):
+        lst.sort(key=lambda t: t[1].rel)
+    return d
+
+
+def _merge_uploaded(raw: list[str]) -> list[dict]:
+    """묶이는 스냅샷들의 uploaded 를 rel 기준으로 합친다(첫 old_sha + 마지막 new_sha)."""
+    merged: dict[str, dict] = {}
+    for blob in raw:
+        for it in (json.loads(blob) if blob else []):
+            cur = merged.get(it["rel"])
+            if cur is None:
+                merged[it["rel"]] = dict(it)
+                continue
+            first_old, first_old_size = cur.get("old_sha"), cur.get("old_size", 0)
+            first_rel = cur.get("old_rel")
+            cur.update(it)
+            cur["old_sha"] = first_old
+            cur["old_size"] = first_old_size
+            if first_rel:
+                cur["old_rel"] = first_rel
+            if first_old is None and it.get("state") != "deleted":
+                cur["state"] = "added"
+            elif it.get("state") == "deleted":
+                cur["state"] = "deleted"
+    out = []
+    for it in merged.values():
+        if it.get("old_sha") and it.get("old_sha") == it.get("new_sha") and it.get("state") != "moved":
+            continue        # 올렸다가 되돌아온 것은 결과적으로 변경 없음
+        if it.get("old_sha") is None and it.get("new_sha") is None:
+            continue
+        out.append(it)
+    return out
 
 
 def _pkg_of(rel: str) -> str:

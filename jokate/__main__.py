@@ -5,7 +5,10 @@ jokate CLI
   python -m jokate scan <project> [--hash-vendor] [--json]
   python -m jokate inspect <file.uasset> [--thumb out.png]
   python -m jokate table <project> [--tier authored] [--cls Blueprint]
-  python -m jokate snap <project> [-m 메시지]      # authored 스냅샷 (-m 없으면 auto)
+  python -m jokate snap <project> [-m 메시지]      # -m 있으면 upload 와 동일, 없으면 auto 스냅샷
+  python -m jokate upload <project> -m 메시지 [--only rel ...]   # 고른 변경만 올리기(baseline 갱신)
+  python -m jokate status <project>                # baseline 대비 아직 올리지 않은 변경
+  python -m jokate revert <project> [--asset rel ...] [--apply]  # 올린 상태로 되돌리기
   python -m jokate log <project>
   python -m jokate show <project> <id>             # 직전 스냅샷 대비 변경
   python -m jokate restore <project> <id> [--asset rel ...] [--apply] [--discard-dirty]   # 롤백 (기본 드라이런)
@@ -104,6 +107,25 @@ def cmd_snap(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_upload(a: argparse.Namespace) -> int:
+    """골라서 올리기: 고른 변경만 baseline 에 반영하고 이름 붙은 스냅샷을 남긴다."""
+    from . import store as storemod
+    cfg = cfgmod.load(a.project)
+    st = storemod.Store(cfg)
+    t0 = time.time()
+    snap, d, stored = st.upload(a.message or "", only=a.only or None)
+    if snap is None:
+        print("올릴 변경 없음 — 아무것도 올리지 않았다")
+        return 0
+    from . import meta as metamod
+    saved, _ = metamod.capture_for_snapshot(st, d)
+    print(f"올림 → snapshot #{snap.id} ({snap.kind}) {snap.message}".rstrip())
+    print(storemod.format_diff(d))
+    extra = f", 내용 기록 {saved}개" if saved else ""
+    print(f"새 객체 {stored}개{extra}  ({time.time() - t0:.1f}s)")
+    return 0
+
+
 def cmd_status(a: argparse.Namespace) -> int:
     from . import store as storemod
     cfg = cfgmod.load(a.project)
@@ -112,9 +134,32 @@ def cmd_status(a: argparse.Namespace) -> int:
     if d.empty:
         print("올릴 변경 없음")
         return 0
-    head = st.head()
-    print(f"HEAD #{head.id if head else '-'} 대비 올리지 않은 변경:")
+    print("마지막으로 올린 상태(baseline) 대비 올리지 않은 변경:")
     print(storemod.format_diff(d))
+    return 0
+
+
+def cmd_revert(a: argparse.Namespace) -> int:
+    """고른 애셋을 baseline(마지막으로 올린 상태)으로 되돌린다. 기본 드라이런."""
+    from . import store as storemod
+    cfg = cfgmod.load(a.project)
+    st = storemod.Store(cfg)
+    storemod.cleanup_tmp_files(cfg)
+    try:
+        plan = st.plan_revert_to_baseline(a.asset or None)
+    except KeyError as e:
+        print(e, file=sys.stderr)
+        return 1
+    print(storemod.format_restore(plan))
+    if not a.apply:
+        print("(드라이런 — 적용하려면 --apply)")
+        return 0
+    try:
+        r = st.apply_restore(plan, discard_dirty=a.discard_dirty)
+    except (RuntimeError, FileNotFoundError) as e:
+        print(e, file=sys.stderr)
+        return 2
+    print(f"되돌림: 파일 {r.written}개 씀, {r.deleted}개 삭제 → 스냅샷 #{r.result.id}")
     return 0
 
 
@@ -330,7 +375,18 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--force", action="store_true", help="변경 없어도 스냅샷 생성")
     s.add_argument("--only", nargs="+", metavar="REL", help="이 애셋만 올림(부분 스냅샷, 나머지는 HEAD 유지)")
     s.set_defaults(fn=cmd_snap)
-    s = sub.add_parser("status"); s.add_argument("project"); s.set_defaults(fn=cmd_status)
+    s = sub.add_parser("upload", help="고른 변경만 올리기(baseline 갱신 + 라벨 스냅샷)")
+    s.add_argument("project"); s.add_argument("-m", "--message")
+    s.add_argument("--only", nargs="+", metavar="REL", help="이 애셋만 올림(생략하면 전부)")
+    s.set_defaults(fn=cmd_upload)
+    s = sub.add_parser("status", help="baseline(마지막으로 올린 상태) 대비 변경")
+    s.add_argument("project"); s.set_defaults(fn=cmd_status)
+    s = sub.add_parser("revert", help="고른 애셋을 마지막으로 올린 상태로 되돌리기 (기본 드라이런)")
+    s.add_argument("project")
+    s.add_argument("--asset", action="append", metavar="REL", help="되돌릴 애셋(반복 가능, 생략하면 전부)")
+    s.add_argument("--apply", action="store_true")
+    s.add_argument("--discard-dirty", action="store_true")
+    s.set_defaults(fn=cmd_revert)
     s = sub.add_parser("log"); s.add_argument("project"); s.set_defaults(fn=cmd_log)
     s = sub.add_parser("show"); s.add_argument("project"); s.add_argument("id", type=int); s.set_defaults(fn=cmd_show)
     s = sub.add_parser("restore"); s.add_argument("project"); s.add_argument("id", type=int)

@@ -109,13 +109,14 @@ def test_api_noise_serialization(tmp_path: Path) -> None:
     assert d["all_noise"] is True and d["counts"]["resave"] == 1
     assert d["modified"][0]["new"]["noise"] is True
     assert any(c.get("resave") == 1 for c in d["by_class"].values())
-    assert web.api_status(st)["diff"]["all_noise"] is False
+    # baseline 모델: 자동 스냅샷은 baseline 을 건드리지 않으므로 리세이브 변경은 '올리지 않은 변경'으로 남는다
+    assert web.api_status(st)["diff"]["all_noise"] is True
 
 
 def test_api_snap_create(st: storemod.Store) -> None:
     r = web.api_snap_create(st, "라벨")
     assert r["snapshot"]["id"] == 3 and r["snapshot"]["kind"] == "label"
-    assert r["diff"]["counts"] == {"added": 0, "modified": 0, "resave": 0, "moved": 0, "deleted": 0}
+    assert r["diff"]["counts"] == {"added": 1, "modified": 1, "resave": 0, "moved": 1, "deleted": 0}
     assert web.api_log(st)[0]["message"] == "라벨"
 
 
@@ -166,20 +167,20 @@ def test_api_thumb_rel(st: storemod.Store) -> None:
 
 
 def test_api_status_and_snap_only(st: storemod.Store) -> None:
-    assert web.api_status(st)["diff"]["counts"] == {"added": 0, "modified": 0, "resave": 0, "moved": 0, "deleted": 0}
+    # 자동 스냅샷만 찍힌 상태 → 아직 아무것도 올리지 않았다
+    assert web.api_status(st)["diff"]["counts"] == {"added": 1, "modified": 1, "resave": 0, "moved": 1, "deleted": 0}
     foo = st.cfg.content / "Foo"
     (foo / "A.uasset").write_bytes(b"AAAA-v3")
     (foo / "D.uasset").write_bytes(b"DDDD")
     d = web.api_status(st)["diff"]
-    assert d["counts"] == {"added": 1, "modified": 1, "resave": 0, "moved": 0, "deleted": 0}
+    assert d["counts"] == {"added": 2, "modified": 1, "resave": 0, "moved": 1, "deleted": 0}
     r = web.api_snap_create(st, "부분", ["Foo/A.uasset"])
-    assert r["snapshot"]["id"] == 3 and r["stored"] == 1
+    assert r["snapshot"]["id"] == 3 and r["stored"] == 2   # A 새 버전 + 아직 안 올린 D 객체도 보관
     assert r["diff"]["counts"] == {"added": 0, "modified": 1, "resave": 0, "moved": 0, "deleted": 0}
-    assert set(st.tree(3)) == {"Foo/A.uasset", "Foo/B.uasset", "Foo/C2.uasset"}
-    assert web.api_status(st)["diff"]["counts"]["added"] == 1   # D 는 아직 안 올라감
+    assert set(st.tree(3)) == {"Foo/A.uasset", "Foo/B.uasset", "Foo/C2.uasset", "Foo/D.uasset"}
+    assert web.api_status(st)["diff"]["counts"]["added"] == 2   # B·D 는 아직 안 올라감
     assert web.api_snap_create(st, "무변경", ["Foo/A.uasset"])["snapshot"] is None
-    with pytest.raises(KeyError):
-        web.api_snap_create(st, "x", ["Nope.uasset"])
+    assert web.api_snap_create(st, "x", ["Nope.uasset"])["snapshot"] is None
 
 
 def test_api_restore_apply(st: storemod.Store, monkeypatch: pytest.MonkeyPatch) -> None:

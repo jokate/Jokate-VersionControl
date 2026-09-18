@@ -224,14 +224,14 @@ def api_restore(store: Store, sid: int, assets: list[str] | None = None) -> dict
 
 
 def api_status(store: Store) -> dict:
-    """HEAD 대비 아직 올리지 않은 변경."""
+    """baseline(마지막으로 올린 상태) 대비 아직 올리지 않은 변경."""
     return {"diff": _diff(store.status())}
 
 
 def api_snap_create(store: Store, message: str, only: list[str] | None = None) -> dict:
-    """only 가 비면 전체(변경 없어도 생성). only 가 있으면 부분 스냅샷 — 선택한 것에 변경 없으면 snapshot=None."""
+    """사용자 올리기(upload). only 가 비면 올리지 않은 변경 전부, 올릴 게 없으면 snapshot=None."""
     only = [str(x) for x in (only or []) if str(x).strip()]
-    snap, d, stored = store.snap(message, kind="label", force=not only, only=only or None)  # KeyError → 404
+    snap, d, stored = store.upload(message, only=only or None)
     if snap is not None:
         metamod.capture_for_snapshot(store, d)
     return {"snapshot": _snapshot(snap) if snap else None, "diff": _diff(d), "stored": stored}
