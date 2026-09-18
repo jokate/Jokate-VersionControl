@@ -9,6 +9,7 @@ jokate CLI
   python -m jokate log <project>
   python -m jokate show <project> <id>             # 직전 스냅샷 대비 변경
   python -m jokate restore <project> <id> [--asset rel ...] [--apply]   # 롤백 (기본 드라이런)
+  python -m jokate watch <project> [--interval 2] [--debounce 5]        # 저장 감지 자동 스냅샷
 """
 from __future__ import annotations
 
@@ -145,6 +146,12 @@ def cmd_restore(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_watch(a: argparse.Namespace) -> int:
+    from . import watch as watchmod
+    cfg = cfgmod.load(a.project)
+    return watchmod.run(cfg, interval=a.interval, debounce=a.debounce)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="jokate")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -163,6 +170,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--asset", action="append", metavar="REL", help="이 애셋만 되돌림 (Content 기준 상대경로, 반복 가능)")
     s.add_argument("--apply", action="store_true", help="실제 적용 (기본은 드라이런)")
     s.set_defaults(fn=cmd_restore)
+    s = sub.add_parser("watch"); s.add_argument("project")
+    s.add_argument("--interval", type=float, default=2.0, help="폴링 주기(초)")
+    s.add_argument("--debounce", type=float, default=5.0, help="마지막 변화 후 이만큼 조용하면 스냅샷(초)")
+    s.set_defaults(fn=cmd_watch)
 
     a = ap.parse_args(argv)
     return a.fn(a)
