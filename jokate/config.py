@@ -7,6 +7,9 @@ content = "Content"            # 추적 루트 (프로젝트 기준 상대경로
 [tiers]
 vendor = ["Paragon*", "SwordAnimsetPro"]   # 동결 등급 폴더 (Content 기준, glob)
 ignore = ["Developers", "Collections"]      # 아예 추적하지 않음
+
+[web]
+port = 8765                    # serve 포트 (--port 미지정 시). 에디터 메뉴도 이 값을 읽는다
 """
 from __future__ import annotations
 
@@ -26,7 +29,12 @@ content = "Content"
 vendor = []
 # 추적 제외
 ignore = ["Developers", "Collections"]
+
+[web]
+# serve 포트 (--port 미지정 시). 에디터 우클릭 메뉴도 이 값으로 접속
+port = 8765
 """
+DEFAULT_PORT = 8765
 
 
 @dataclass
@@ -35,6 +43,7 @@ class Config:
     content: Path
     vendor: list[str] = field(default_factory=list)
     ignore: list[str] = field(default_factory=lambda: ["Developers", "Collections"])
+    port: int = DEFAULT_PORT
 
     @property
     def state_dir(self) -> Path:
@@ -65,6 +74,7 @@ def load(project: str | Path) -> Config:
         content=content,
         vendor=list(tiers.get("vendor", [])),
         ignore=list(tiers.get("ignore", ["Developers", "Collections"])),
+        port=int(data.get("web", {}).get("port", DEFAULT_PORT)),
     )
 
 

@@ -196,7 +196,7 @@ def cmd_watch(a: argparse.Namespace) -> int:
 def cmd_serve(a: argparse.Namespace) -> int:
     from . import web as webmod
     cfg = cfgmod.load(a.project)
-    return webmod.serve(cfg, port=a.port)
+    return webmod.serve(cfg, port=a.port if a.port is not None else cfg.port)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -228,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--debounce", type=float, default=5.0, help="마지막 변화 후 이만큼 조용하면 스냅샷(초)")
     s.set_defaults(fn=cmd_watch)
     s = sub.add_parser("serve"); s.add_argument("project")
-    s.add_argument("--port", type=int, default=8765); s.set_defaults(fn=cmd_serve)
+    s.add_argument("--port", type=int, default=None, help="기본: config.toml [web] port (8765)"); s.set_defaults(fn=cmd_serve)
 
     a = ap.parse_args(argv)
     return a.fn(a)

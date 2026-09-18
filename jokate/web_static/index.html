@@ -59,6 +59,7 @@
   .note { background:#1a2a3a; border:1px solid var(--acc); border-radius:6px; padding:8px 12px; margin:8px 0; }
   .ok { color:var(--a); }
   #restore { margin-top:16px; }
+  #changes.hot { outline:2px solid var(--a); box-shadow:0 0 0 4px #4caf5033; }
   .hint { font-size:12px; color:var(--dim); }
   /* 컨텍스트 메뉴 */
   #ctx { display:none; position:fixed; z-index:50; min-width:220px; background:var(--panel); border:1px solid var(--line); border-radius:6px; box-shadow:0 6px 20px #000a; padding:4px 0; }
@@ -439,7 +440,21 @@ $('#msg').onkeydown = e => { if (e.key === 'Enter') $('#mksnap').click(); };
 $('#reload').onclick = () => { loadLog(); loadStatus(); };
 $('#reloadStatus').onclick = loadStatus;
 setInterval(loadStatus, 30000);
-loadLog(); loadStatus();
+
+// ---- URL 쿼리 (에디터 메뉴에서 열림): ?asset=<rel> → 최신 스냅샷의 그 애셋 히스토리, ?view=status → 변경사항 패널 강조 ----
+async function openFromQuery() {
+  const q = new URLSearchParams(location.search);
+  const asset = q.get('asset'), view = q.get('view');
+  if (view === 'status') { const c = $('#changes'); c.classList.add('hot'); c.scrollIntoView({block: 'start'}); setTimeout(() => c.classList.remove('hot'), 6000); }
+  if (asset && headId != null) {
+    await select(headId);
+    const tr = listRows('detail').find(r => r.dataset.rel === asset) || null;
+    if (tr) { sel.detail.clear(); sel.detail.add(asset); paintSel('detail'); }
+    await showHistory(asset, tr);
+    $('#history').scrollIntoView({block: 'start'});
+  } else if (asset) status('스냅샷이 없어 히스토리를 열 수 없음: ' + asset);
+}
+(async () => { await loadLog(); await loadStatus(); await openFromQuery(); })();
 </script>
 </body>
 </html>

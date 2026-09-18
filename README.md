@@ -51,6 +51,19 @@ python -m jokate serve   <project> [--port 8765]                      # 타임�
 - 되돌리기는 항상 드라이런 확인 모달을 먼저 띄운다: 변경 목록(M/A/R/D) + 클래스별 집계 + 참조 경고(빨강) + '되돌리기 직전 안전 스냅샷이 자동 생성됩니다'. 확인하면 `POST /api/restore/<id>` 적용 → '롤백 완료 #N · 안전 스냅샷 #M' 토스트, 타임라인·변경사항 갱신
 - 에디터에 저장 안 한 변경(dirty)으로 409 가 오면 모달에 dirty 목록과 '저장 안 한 변경 버리고 진행' 버튼(`discard_dirty:true` 재요청). 그 외 오류는 모달에 메시지
 - 컨텍스트 메뉴는 화면 밖으로 나가지 않으며 Esc·바깥 클릭·스크롤로 닫힌다
+- URL 쿼리: `/?asset=<rel>` 이면 로드 후 최신 스냅샷을 선택하고 그 애셋의 버전 히스토리를 자동으로 연다, `/?view=status` 면 '현재 변경사항' 패널을 강조 (에디터 메뉴가 사용)
+- 포트: `.jokate/config.toml` 의 `[web] port`(기본 8765). `serve --port` 가 우선
+
+## 에디터 메뉴 (콘텐츠 브라우저 우클릭 → Jokate)
+
+`bridge-install` 후 에디터를 재시작하면(또는 Python 콘솔에서 `import jokate_bridge`) 콘텐츠 브라우저 애셋 우클릭 메뉴에 `Jokate` 서브메뉴가 생긴다. `python -m jokate serve <project>` 가 떠 있어야 동작한다 (안 떠 있으면 Output Log 에 '먼저 python -m jokate serve <프로젝트> 를 실행' 경고).
+
+- `선택한 애셋 올리기(스냅샷)`: 선택 애셋만 부분 스냅샷. 메시지는 `에디터에서 올림: <애셋명> n개` 자동
+- `선택한 애셋을 마지막 스냅샷 상태로 되돌리기`: `POST /api/restore/<HEAD>` (드라이런 없음, 안전 스냅샷은 서버가 자동 생성). 에디터에 저장 안 한 대상이 있으면 409 로 차단 → Output Log 에 dirty 목록과 '저장 후 다시 시도'. 성공 시 '롤백 완료 #N'
+- `히스토리 열기(웹)`: 브라우저로 `/?asset=<rel>` · `현재 변경사항 보기(웹)`: `/?view=status`
+- 구현: `jokate/ue/jokate_client.py`(urllib 만, `unreal` 미사용 → `tests/test_ue_client.py` 로 가짜 서버 왕복 테스트) + `jokate_bridge.py` 의 `unreal.ToolMenuEntryScript` 서브클래스. 두 파일 모두 `bridge-install` 이 `Content/Python/` 에 복사
+- HTTP 는 항상 `threading.Thread` 에서 보내고 결과는 큐 → 기존 `_tick` 에서 `unreal.log` 로 보고. 게임 스레드에서 동기로 부르면 서버가 같은 에디터의 브릿지(dirty/reload)를 기다리므로 데드락
+- 선택 애셋 → 패키지명 → `package_to_rel` (`/Game/A/B` → `A/B.uasset`, 디스크에 `.umap` 이 있으면 `.umap`). `/Game` 밖은 무시
 
 ## 자동 스냅샷 (watch)
 
@@ -97,7 +110,7 @@ python -m jokate serve   <project> [--port 8765]                      # 타임�
 - `jokate/store.py` — 스냅샷 저장소 (내용주소 객체 + SQLite 인덱스, 트리 diff)
 - `jokate/watch.py` — 저장 감지 자동 스냅샷 데몬 (폴링 + debounce, `poll_once` 순수 함수)
 - `jokate/web.py` + `jokate/web_static/index.html` — 타임라인 웹 UI (JSON API 는 `api_*` 순수 함수, 서버 없이 테스트)
-- `jokate/bridge.py` — 에디터 브릿지 도구 쪽 (`bridge_alive`, `request`, `install`) / `jokate/ue/jokate_bridge.py` — 에디터 쪽 (UE Python, `import unreal`)
+- `jokate/bridge.py` — 에디터 브릿지 도구 쪽 (`bridge_alive`, `request`, `install`) / `jokate/ue/jokate_bridge.py` — 에디터 쪽 (UE Python, `import unreal`, 콘텐츠 브라우저 메뉴) / `jokate/ue/jokate_client.py` — 웹 API 클라이언트 (urllib 만)
 - `jokate/config.py` — 프로젝트 설정
 - `jokate/__main__.py` — CLI
 

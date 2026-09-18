@@ -21,6 +21,7 @@ from .config import Config
 
 HEARTBEAT_MAX_AGE = 3.0
 _SRC = Path(__file__).resolve().parent / "ue" / "jokate_bridge.py"
+_SRC_CLIENT = Path(__file__).resolve().parent / "ue" / "jokate_client.py"
 INIT_LINE = "import jokate_bridge"
 
 
@@ -95,10 +96,11 @@ def install(project: Path) -> list[str]:
     done: list[str] = []
     pydir = Path(project).resolve() / "Content" / "Python"
     pydir.mkdir(parents=True, exist_ok=True)
-    dst = pydir / "jokate_bridge.py"
-    if not dst.exists() or dst.read_bytes() != _SRC.read_bytes():
-        shutil.copyfile(_SRC, dst)
-        done.append(f"copied {dst}")
+    for src in (_SRC, _SRC_CLIENT):
+        dst = pydir / src.name
+        if not dst.exists() or dst.read_bytes() != src.read_bytes():
+            shutil.copyfile(src, dst)
+            done.append(f"copied {dst}")
     init = pydir / "init_unreal.py"
     if not init.exists():
         init.write_text(INIT_LINE + "\n", encoding="utf-8")
