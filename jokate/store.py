@@ -415,11 +415,13 @@ class Store:
             raise
         return len(targets)
 
-    def squash(self, ids: list[int], message: str = "") -> tuple[Snapshot, int]:
+    def squash(self, ids: list[int], message: str = "",
+               include_labels: bool = False) -> tuple[Snapshot, int]:
         """연속된 사슬(부모-자식)인 스냅샷들을 마지막 하나로 묶는다.
 
         마지막(가장 큰 id) 스냅샷만 kind=label + message 로 남기고 나머지는 삭제.
         사슬이 아니거나 2개 미만이면 ValueError. 반환 (남은 스냅샷, 지운 수).
+        지워질 쪽에 이름 붙인(label) 스냅샷이 있으면 include_labels=False 일 때 SquashHasLabels.
         """
         want = sorted({int(i) for i in ids})
         if len(want) < 2:
@@ -434,6 +436,13 @@ class Store:
             if b.parent != a.id:
                 raise ValueError(f"#{a.id} → #{b.id} 는 연속된 사슬이 아니다")
         keep = snaps[-1]
+        if not include_labels:
+            doomed = [(s.id, s.message) for s in snaps[:-1] if s.kind == "label"]
+            if doomed:
+                raise SquashHasLabels(
+                    "묶으면 이름 붙인 스냅샷 "
+                    + ", ".join(f"#{i} ({m})".rstrip() for i, m in doomed)
+                    + " 가 함께 사라진다", doomed)
         self.db.execute("UPDATE snapshots SET kind='label', message=? WHERE id=?", (message, keep.id))
         removed = self.delete_snapshots([s.id for s in snaps[:-1]])
         self.db.commit()
@@ -502,6 +511,14 @@ class Store:
 
     def close(self) -> None:
         self.db.close()
+
+
+class SquashHasLabels(ValueError):
+    """묶으면 사라질 이름 붙인 스냅샷이 있다. labels 에 [(id, message), ...]."""
+
+    def __init__(self, msg: str, labels: list[tuple[int, str]] | None = None):
+        super().__init__(msg)
+        self.labels: list[tuple[int, str]] = list(labels or [])
 
 
 class RestoreBlocked(RuntimeError):

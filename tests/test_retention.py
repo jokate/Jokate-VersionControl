@@ -133,6 +133,38 @@ def test_restore_after_delete(st: storemod.Store) -> None:
     assert (st.cfg.content / "Foo" / "A.uasset").read_bytes() == b"A-v2"
 
 
+def label(st: storemod.Store, sid: int, msg: str) -> None:
+    st.db.execute("UPDATE snapshots SET kind='label', message=? WHERE id=?", (msg, sid))
+    st.db.commit()
+
+
+def test_squash_blocks_labels(st: storemod.Store) -> None:
+    ids = make_chain(st, 5)
+    label(st, 2, "몹스터 수정")
+    with pytest.raises(storemod.SquashHasLabels) as ei:
+        st.squash(ids[1:4], "묶음")               # 2,3,4
+    assert ei.value.labels == [(2, "몹스터 수정")]
+    assert isinstance(ei.value, ValueError)
+    assert [s.id for s in st.log()] == [5, 4, 3, 2, 1]   # 아무것도 안 지워졌다
+    assert st.get(2).kind == "label"
+
+
+def test_squash_include_labels(st: storemod.Store) -> None:
+    ids = make_chain(st, 5)
+    label(st, 2, "몹스터 수정")
+    keep, removed = st.squash(ids[1:4], "묶음", include_labels=True)
+    assert keep.id == 4 and keep.kind == "label" and keep.message == "묶음"
+    assert removed == 2
+    assert [s.id for s in st.log()] == [5, 4, 1]
+
+
+def test_squash_last_label_ok(st: storemod.Store) -> None:
+    ids = make_chain(st, 4)
+    label(st, 3, "마지막 라벨")                    # 사슬의 마지막 = 남는 것
+    keep, removed = st.squash(ids[0:3], "묶음")
+    assert keep.id == 3 and removed == 2
+
+
 # ---- web API ----
 def test_api_squash(st: storemod.Store) -> None:
     ids = make_chain(st, 4)
@@ -141,6 +173,21 @@ def test_api_squash(st: storemod.Store) -> None:
     assert r["removed"] == 2
     with pytest.raises(ValueError):
         web.api_squash(st, [3, 999], "x")
+
+
+def test_api_squash_labels_409(st: storemod.Store) -> None:
+    ids = make_chain(st, 4)
+    label(st, 2, "몹스터 수정")
+    try:
+        web.api_squash(st, ids[0:3], "묶음")
+        raise AssertionError("막혔어야 한다")
+    except storemod.SquashHasLabels as e:
+        code, body = web.error_response(e)
+    assert code == 409 and body["ok"] is False
+    assert body["labels"] == [{"id": 2, "message": "몹스터 수정"}]
+    assert "몹스터 수정" in body["error"]
+    r = web.api_squash(st, ids[0:3], "묶음", include_labels=True)
+    assert r["snapshot"]["id"] == 3 and r["removed"] == 2
 
 
 def test_api_prune(st: storemod.Store) -> None:

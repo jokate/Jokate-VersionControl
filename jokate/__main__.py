@@ -9,7 +9,7 @@ jokate CLI
   python -m jokate log <project>
   python -m jokate show <project> <id>             # 직전 스냅샷 대비 변경
   python -m jokate restore <project> <id> [--asset rel ...] [--apply] [--discard-dirty]   # 롤백 (기본 드라이런)
-  python -m jokate squash <project> <from_id> <to_id> [-m 메시지]   # 연속 스냅샷 묶기
+  python -m jokate squash <project> <from_id> <to_id> [-m 메시지] [--include-labels]   # 연속 스냅샷 묶기
   python -m jokate prune <project> [--days N] [--keep N] [--dry-run]  # 오래된 auto 스냅샷 정리
   python -m jokate gc <project> [--dry-run]         # 참조 없는 객체 삭제
   python -m jokate bridge-install <project>      # 에디터 브릿지 스크립트를 Content/Python 에 설치
@@ -191,7 +191,13 @@ def cmd_squash(a: argparse.Namespace) -> int:
         print(f"#{lo} 에서 #{hi} 로 이어지는 사슬이 없다", file=sys.stderr)
         return 1
     try:
-        snap, removed = st.squash(chain, a.message or "")
+        snap, removed = st.squash(chain, a.message or "", include_labels=bool(a.include_labels))
+    except storemod.SquashHasLabels as e:
+        print("이름 붙인 스냅샷이 함께 사라진다:", file=sys.stderr)
+        for i, m in e.labels:
+            print(f"  #{i} {m}".rstrip(), file=sys.stderr)
+        print("그래도 묶으려면 --include-labels 로 다시 실행", file=sys.stderr)
+        return 2
     except ValueError as e:
         print(e, file=sys.stderr)
         return 1
@@ -298,6 +304,8 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("squash", help="연속된 스냅샷을 하나로 묶고 이름 붙이기")
     s.add_argument("project"); s.add_argument("from_id", type=int); s.add_argument("to_id", type=int)
     s.add_argument("-m", "--message", help="묶은 스냅샷 이름")
+    s.add_argument("--include-labels", action="store_true",
+                   help="사슬 안의 이름 붙인 스냅샷도 함께 합쳐 지움")
     s.set_defaults(fn=cmd_squash)
     s = sub.add_parser("prune", help="오래된 자동 스냅샷 정리 (라벨은 안 지움)")
     s.add_argument("project")

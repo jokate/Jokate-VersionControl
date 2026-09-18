@@ -531,29 +531,53 @@ function snapMenu(id, e) {
     {ic:'⟲', label:`이 스냅샷(#${id})으로 되돌리기`, run: () => restoreFlow(id, [])},
   ]);
 }
-function squashPrompt(n) {
+function squashPrompt(n, def) {
   return new Promise(res => {
     openModal(`<h3>스냅샷 ${n}개를 하나로 묶기</h3>
       <div class="hint">연속된 스냅샷을 마지막 하나로 합치고 이름을 붙입니다. 중간 스냅샷은 삭제되고, 남는 스냅샷은 그대로 온전합니다.</div>
-      <input id="sqmsg" placeholder="묶은 스냅샷 이름" maxlength="200">
+      <input id="sqmsg" placeholder="묶은 스냅샷 이름" maxlength="200" value="${esc(def || '')}">
       <div class="btns"><button id="sqcancel" class="ghost">취소</button><button id="sqok">묶기</button></div>`);
-    const inp = $('#sqmsg'); inp.focus();
+    const inp = $('#sqmsg'); inp.focus(); inp.select();
     const done = v => { closeModal(); res(v); };
     $('#sqcancel').onclick = () => done(null);
     $('#sqok').onclick = () => { const v = inp.value.trim(); if (!v) { inp.focus(); return; } done(v); };
     inp.onkeydown = ev => { if (ev.key === 'Enter') $('#sqok').click(); };
   });
 }
+// 사라질 라벨 목록을 보여주고 강행 여부를 묻는다
+function squashLabelsConfirm(labels) {
+  return new Promise(res => {
+    openModal(`<h3>이름 붙인 스냅샷 ${labels.length}개가 함께 합쳐져 사라집니다</h3>
+      <div class="hint">묶으면 아래 스냅샷들은 마지막 하나로 합쳐지고 따로 남지 않습니다.</div>
+      <ul class="dirty">` + labels.map(l => `<li>#${l.id} ${esc(l.message || '(이름 없음)')}</li>`).join('') + `</ul>
+      <div class="btns"><button id="slcancel" class="ghost">취소</button><button id="slok" class="danger">그래도 묶기</button></div>`);
+    const done = v => { closeModal(); res(v); };
+    $('#slcancel').onclick = () => done(false);
+    $('#slok').onclick = () => done(true);
+  });
+}
 async function squashFlow(ids) {
   if (!ids) return;
-  const message = await squashPrompt(ids.length);
+  const by = new Map(lastLog.map(s => [s.id, s]));
+  const def = ids.map(i => by.get(i)).filter(s => s && s.kind === 'label' && s.message)
+                 .map(s => s.message).join(' + ');
+  const message = await squashPrompt(ids.length, def);
   if (!message) return;
-  try {
-    const r = await api('/api/squash', {method:'POST', headers:JSONH, body:JSON.stringify({ids, message})});
+  const send = async include_labels => {
+    const r = await api('/api/squash', {method:'POST', headers:JSONH,
+      body:JSON.stringify({ids, message, include_labels})});
     tlSel.clear(); tlAnchor = null;
     await loadLog(); await select(r.snapshot.id);
     toast(`#${r.snapshot.id} 로 묶음 · 스냅샷 ${r.removed}개 정리`);
-  } catch (e) { toast('오류: ' + e.message, true); }
+  };
+  try {
+    await send(false);
+  } catch (e) {
+    const labels = (e.status === 409 && e.body && Array.isArray(e.body.labels)) ? e.body.labels : [];
+    if (!labels.length) { toast('오류: ' + e.message, true); return; }
+    if (!await squashLabelsConfirm(labels)) return;
+    try { await send(true); } catch (e2) { toast('오류: ' + e2.message, true); }
+  }
 }
 async function pruneFlow() {
   let pre;
