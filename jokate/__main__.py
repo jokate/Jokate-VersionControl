@@ -164,6 +164,9 @@ def cmd_uediff(a: argparse.Namespace) -> int:
                 return 1
             shas.append(e.sha)
         r = uediffmod.open_diff(st, rel, shas[0], shas[1] if len(shas) > 1 else None)
+    except uediffmod.DiffBlocked as e:      # 에디터가 켜져 있음 — 두 번째 에디터는 띄우지 않는다
+        print(e, file=sys.stderr)
+        return 2
     except uediffmod.EditorNotFound as e:
         print(e, file=sys.stderr)
         return 1
@@ -172,7 +175,8 @@ def cmd_uediff(a: argparse.Namespace) -> int:
         return 1
     finally:
         st.close()
-    print(f"UE diff 실행 (pid {r['pid']})\n  좌: {r['left']}\n  우: {r['right']}")
+    where = "켜져 있는 에디터에서 열었습니다" if r.get("mode") == "editor" else f"새 에디터 실행 (pid {r['pid']})"
+    print(f"UE diff — {where}\n  좌: {r['left']}\n  우: {r['right']}")
     return 0
 
 

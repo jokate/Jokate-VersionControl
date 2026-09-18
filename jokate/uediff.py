@@ -25,8 +25,16 @@ HINT = ("UnrealEditor.exe 를 찾지 못했습니다. "
         ".jokate/config.toml 의 [editor] exe 에 UnrealEditor.exe 경로를 적으세요")
 
 
+BRIDGE_OFF_HINT = ("에디터는 켜져 있는데 브릿지가 꺼져 있습니다 — 에디터 상단 툴 메뉴의 "
+                   "Jokate > 브릿지 켜기 를 누르거나 에디터를 다시 시작하세요")
+
+
 class EditorNotFound(RuntimeError):
     """언리얼 에디터 실행 파일을 못 찾음 (웹에서는 409)."""
+
+
+class DiffBlocked(RuntimeError):
+    """에디터가 켜져 있어 두 번째 에디터를 띄우지 않고 막음 (웹에서는 409)."""
 
 
 def find_uproject(root: str | Path) -> Path | None:
@@ -227,41 +235,81 @@ def open_in_editor(store, rel: str, a_sha: str, b_sha: str | None = None, bridge
             "left_label": str(a_sha)[:8], "right_label": right_label}
     resp = bridge.request(cfg, "diff", [], args, timeout=DIFF_TIMEOUT)
     if not resp.get("ok"):
-        raise RuntimeError(str(resp.get("error") or "에디터 diff 실패"))
+        err = str(resp.get("error") or "에디터 diff 실패")
+        tried = str(resp.get("strategy") or "").strip() or "없음"
+        raise DiffBlocked(f"에디터에서 diff 를 열지 못했습니다: {err} (시도한 전략: {tried})")
     return {"mode": "editor", "strategy": resp.get("strategy"), "pid": None,
             "left": left["file"], "right": right_file, "note": ""}
+
+
+def plan_diff(store, bridge=None, editor_running=None) -> dict:
+    """요청 전에 어떤 방식이 될지 미리 알려준다 → {mode, editor_running, bridge, hint}.
+
+    mode='editor' 면 켜져 있는 에디터에서 연다(브릿지가 꺼져 있으면 hint 가 막힐 이유),
+    mode='process' 면 새 에디터 프로세스를 띄운다(1분쯤 걸림) — 확인 모달을 먼저 띄우라는 뜻.
+    """
+    cfg = store.cfg
+    if bridge is None:
+        from . import bridge as bridge  # noqa: PLW0127
+    running = editor_running or _editor_is_running
+    try:
+        is_running = bool(running())
+    except Exception:  # noqa: BLE001
+        is_running = False
+    alive = False
+    if is_running:
+        try:
+            alive = bool(bridge.bridge_alive(cfg))
+        except Exception:  # noqa: BLE001
+            alive = False
+    if is_running and not alive:
+        hint = BRIDGE_OFF_HINT
+    elif is_running:
+        hint = ""
+    else:
+        hint = "에디터가 꺼져 있습니다. diff 를 보려면 에디터를 새로 띄워야 하며 1분쯤 걸립니다. 띄울까요?"
+    return {"mode": "editor" if is_running else "process",
+            "editor_running": is_running, "bridge": alive, "hint": hint}
 
 
 def open_diff(store, rel: str, a_sha: str, b_sha: str | None = None, launcher=None,
               bridge=None, editor_running=None) -> dict:
     """왼쪽=a_sha, 오른쪽=b_sha(없으면 현재 파일).
 
-    에디터가 켜져 있고 브릿지가 살아 있으면 그 에디터 안에서 열고(mode='editor'),
-    아니면 예전처럼 새 에디터 프로세스를 띄운다(mode='process', note=사유).
+    에디터가 켜져 있으면 무조건 그 에디터 안에서 연다(mode='editor'). 브릿지가 꺼져 있거나
+    브릿지 op 가 실패하면 DiffBlocked — 두 번째 에디터는 절대 띄우지 않는다.
+    에디터가 꺼져 있을 때만 새 에디터 프로세스를 띄운다(mode='process').
     """
     rel = str(rel).replace("\\", "/").strip("/")
     if not rel:
         raise ValueError("rel 필요")
     cfg = store.cfg
-    note = ""
     if bridge is None:
         from . import bridge as bridge  # noqa: PLW0127
     running = editor_running or _editor_is_running
     try:
-        alive = bool(running()) and bool(bridge.bridge_alive(cfg))
+        is_running = bool(running())
     except Exception as e:  # noqa: BLE001
-        alive, note = False, f"에디터 상태 확인 실패: {type(e).__name__}: {e}"
-    if alive:
+        is_running, note = False, f"에디터 상태 확인 실패: {type(e).__name__}: {e}"
+    else:
+        note = ""
+    if is_running:
+        try:
+            alive = bool(bridge.bridge_alive(cfg))
+        except Exception:  # noqa: BLE001
+            alive = False
+        if not alive:
+            raise DiffBlocked(BRIDGE_OFF_HINT)
         try:
             r = open_in_editor(store, rel, a_sha, b_sha, bridge=bridge)
-            cleanup_tmp(store)
-            return r
-        except (KeyError, ValueError):
+        except (KeyError, ValueError, DiffBlocked):
             raise
         except Exception as e:  # noqa: BLE001
-            note = f"에디터 브릿지로 열지 못해 새 에디터로 엽니다: {type(e).__name__}: {e}"
-    elif not note:
-        note = "에디터 브릿지가 없어 새 에디터로 엽니다"
+            raise DiffBlocked(f"에디터에서 diff 를 열지 못했습니다: {type(e).__name__}: {e}") from e
+        cleanup_tmp(store)
+        return r
+    if not note:
+        note = "에디터가 꺼져 있어 새 에디터로 엽니다"
     exe = find_editor_exe(cfg)
     if exe is None:
         raise EditorNotFound(HINT)

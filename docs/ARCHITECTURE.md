@@ -98,7 +98,9 @@ HTTP 는 항상 `threading.Thread` 에서 보내고 결과는 큐에 넣어 기�
 
 - **에디터가 켜져 있으면 그 에디터 안에서 연다**(새 에디터를 띄우면 1분쯤 걸리므로). `store.editor_running()` + `bridge.bridge_alive()` 가 참이면 버전 파일을 `<project>/Saved/JokateDiff/<sha8>/<원래이름>`(전략 1: 파일 경로로 `load_package`)과 `<project>/Content/_JokateDiff/<sha8>/<원래이름>`(전략 2: `/Game/_JokateDiff/<sha8>/<이름>` 로 `load_asset`) 두 곳에 꺼내고 브릿지 op `diff`(타임아웃 60초)를 보낸다. 에디터 쪽은 `AssetToolsHelpers.get_asset_tools().diff_assets(old, new, RevisionInfo, RevisionInfo)` 를 게임 스레드에서 호출하고 성공한 전략(`file`/`package`)을 돌려준다 → `{mode:"editor", strategy}`
 - 파일 이름은 반드시 원래 이름을 유지한다(바꾸면 패키지 안 애셋 이름과 어긋나 로드 실패). `_JokateDiff` 최상위 폴더는 `Config.tier_of` 가 설정과 무관하게 `None`(무시) 로 판정해 절대 추적되지 않는다. 두 임시 폴더는 24시간 뒤(데몬 시작 시 `cleanup_tmp`) 정리한다
-- 브릿지가 없거나 op 가 실패하면 예전 경로로 폴백: 두 버전을 `<project>/.jokate/tmp/diff/<이름>__<sha8>.<확장자>` 로 꺼낸 뒤 `UnrealEditor.exe <프로젝트.uproject> -diff <왼쪽> <오른쪽>` 을 창 분리로 실행한다. 임시 파일은 24시간 뒤 정리
+- **에디터가 켜져 있으면 절대 두 번째 에디터를 띄우지 않는다.** 브릿지가 꺼져 있으면 `DiffBlocked`('에디터는 켜져 있는데 브릿지가 꺼져 있습니다 — Jokate > 브릿지 켜기'), 브릿지 op 가 실패하면 브릿지가 돌려준 `error` + 시도한 전략 이름을 담아 `DiffBlocked`. 웹은 409 `{ok:false, error, mode:"editor"}` 로 모달 안내, CLI 는 exit code 2
+- `plan_diff(store)`(= `GET /api/uediff/plan`)가 `mode`(editor/process)를 미리 알려준다. UI 는 `process` 면 '에디터가 꺼져 있습니다 … 띄울까요?' 확인 모달을 먼저 띄운다
+- 에디터가 꺼져 있을 때만 새 프로세스 경로: 두 버전을 `<project>/.jokate/tmp/diff/<이름>__<sha8>.<확장자>` 로 꺼낸 뒤 `UnrealEditor.exe <프로젝트.uproject> -diff <왼쪽> <오른쪽>` 을 창 분리로 실행한다. 임시 파일은 24시간 뒤 정리
 - 에디터 경로: ① `[editor] exe` ② `.uproject` 의 `EngineAssociation` — 버전(`5.7`)이면 `HKLM\SOFTWARE\EpicGames\Unreal Engine\<버전>` 의 `InstalledDirectory`, GUID(소스 빌드)면 `HKCU\Software\Epic Games\Unreal Engine\Builds`
 - 못 찾으면 웹은 409 로 안내한다
 

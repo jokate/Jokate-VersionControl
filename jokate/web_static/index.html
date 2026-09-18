@@ -941,18 +941,37 @@ async function showHistory(rel, tr, snapDiff) {
 }
 
 // ---- UE diff ----
+function confirmModal(title, hint, okLabel) {
+  return new Promise(res => {
+    openModal(`<h3>${esc(title)}</h3><div class="hint">${esc(hint)}</div>
+      <div class="btns"><button id="mcancel" class="ghost">취소</button><button id="mok">${esc(okLabel)}</button></div>`);
+    const done = v => { closeModal(); res(v); };
+    $('#mcancel').onclick = () => done(false);
+    $('#mok').onclick = () => done(true);
+    $('#mok').focus();
+  });
+}
+
 async function uediffFlow(rel, aSha, bSha) {
-  toast('언리얼 diff 창을 여는 중…');
   const body = bSha ? {rel, a: aSha, b: bSha} : {rel, a: aSha};
   try {
+    const plan = await api('/api/uediff/plan').catch(() => ({mode: 'editor'}));
+    if (plan.mode === 'process') {
+      const go = await confirmModal('에디터가 꺼져 있습니다',
+        'diff 를 보려면 에디터를 새로 띄워야 하며 1분쯤 걸립니다. 띄울까요?', '에디터 띄우기');
+      if (!go) return;
+    }
+    toast('언리얼 diff 창을 여는 중…');
     const r = await api('/api/uediff', {method: 'POST', headers: JSONH, body: JSON.stringify(body)});
     toast(r.mode === 'editor' ? '에디터에서 diff 창을 열었습니다'
-      : '에디터가 꺼져 있어 새 에디터로 엽니다 — 1분쯤 걸릴 수 있습니다');
+      : '새 에디터로 엽니다 — 1분쯤 걸릴 수 있습니다');
   } catch (e) {
-    if (e.status === 409)
-      openModal(`<h3>언리얼 에디터를 찾지 못했습니다</h3><div class="err">${esc(e.message)}</div>` +
+    if (e.status === 409) {
+      const editorOn = e.body && e.body.mode === 'editor';
+      openModal(`<h3>${editorOn ? 'diff 창을 열지 못했습니다' : '언리얼 에디터를 찾지 못했습니다'}</h3>` +
+        `<div class="err">${esc(e.message)}</div>` +
         `<div class="btns"><button class="ghost" onclick="closeModal()">닫기</button></div>`);
-    else toast('오류: ' + e.message, true);
+    } else toast('오류: ' + e.message, true);
   }
 }
 

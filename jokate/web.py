@@ -305,6 +305,12 @@ def api_uediff(store: Store, rel: str, a_sha: str, b_sha: str | None = None, lau
             "note": r.get("note", ""), "pid": r["pid"], "left": r["left"], "right": r["right"]}
 
 
+def api_uediff_plan(store: Store) -> dict:
+    """diff 를 열면 어떤 방식이 될지 미리 알려준다 → {ok, mode, editor_running, bridge, hint}."""
+    p = uediffmod.plan_diff(store)
+    return {"ok": True, **p}
+
+
 class DaemonUnavailable(Exception):
     """serve 단독 모드라 데몬 조작이 불가."""
 
@@ -334,6 +340,8 @@ def api_daemon_post(control, action: str) -> dict:
 
 def error_response(e: BaseException) -> tuple[int, dict]:
     """예외 → (HTTP 코드, JSON 본문). RestoreBlocked·DaemonUnavailable·FileNotFoundError 는 409."""
+    if isinstance(e, uediffmod.DiffBlocked):     # 에디터가 켜져 있어 새 에디터를 띄우지 않음
+        return 409, {"ok": False, "error": str(e), "mode": "editor"}
     if isinstance(e, uediffmod.EditorNotFound):
         return 409, {"ok": False, "error": str(e)}
     if isinstance(e, DaemonUnavailable):
@@ -474,6 +482,8 @@ def make_handler(cfg: Config, control=None):
                     if r is None:
                         raise NotFound("썸네일 없음")
                     self._send(200, r[1], r[0])
+                elif path == "/api/uediff/plan":
+                    self._json(self._run(api_uediff_plan))
                 elif path.startswith("/api/restore/"):
                     sid = int(path.rsplit("/", 1)[1])
                     assets = q.get("asset", [])

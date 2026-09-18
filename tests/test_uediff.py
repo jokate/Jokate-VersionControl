@@ -12,6 +12,12 @@ from jokate import uediff  # noqa: E402
 from jokate import web  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _editor_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """기본값: 에디터가 꺼져 있다고 본다(개발 PC 에 실제 UE 가 떠 있어도 테스트가 흔들리지 않게)."""
+    monkeypatch.setattr(storemod, "editor_running", lambda *a, **k: False)
+
+
 @pytest.fixture
 def st(tmp_path: Path) -> storemod.Store:
     root = tmp_path / "Proj"
@@ -234,24 +240,58 @@ def test_open_diff_in_editor_two_versions(st: storemod.Store, tmp_path: Path) ->
     assert (st.cfg.content / "_JokateDiff" / b[:8] / "A.uasset").read_bytes() == b"AAAA-v2-longer"
 
 
-def test_open_diff_falls_back_when_bridge_fails(st: storemod.Store, tmp_path: Path) -> None:
+def test_open_diff_blocked_when_bridge_op_fails(st: storemod.Store, tmp_path: Path) -> None:
+    """에디터가 켜져 있으면 브릿지 op 가 실패해도 새 에디터를 띄우지 않는다."""
     st.cfg.editor_exe = str(fake_exe(tmp_path))
     a, b = shas(st)
-    seen = []
-    br = FakeBridge(resp={"ok": False, "error": "로드 실패"})
-    r = uediff.open_diff(st, "Foo/A.uasset", a, b, launcher=lambda cmd: seen.append(cmd) or 11,
+    br = FakeBridge(resp={"ok": False, "error": "로드 실패", "strategy": "package"})
+    with pytest.raises(uediff.DiffBlocked) as ei:
+        uediff.open_diff(st, "Foo/A.uasset", a, b,
+                         launcher=lambda cmd: pytest.fail("프로세스를 띄우면 안 된다"),
                          bridge=br, editor_running=lambda: True)
-    assert r["mode"] == "process" and r["pid"] == 11 and "로드 실패" in r["note"]
-    assert seen and seen[0][2] == "-diff"
+    assert "로드 실패" in str(ei.value) and "package" in str(ei.value)
 
 
-def test_open_diff_no_bridge_is_process(st: storemod.Store, tmp_path: Path) -> None:
+def test_open_diff_blocked_when_editor_on_but_bridge_off(st: storemod.Store, tmp_path: Path) -> None:
+    st.cfg.editor_exe = str(fake_exe(tmp_path))
+    a, b = shas(st)
+    br = FakeBridge(alive=False)
+    with pytest.raises(uediff.DiffBlocked) as ei:
+        uediff.open_diff(st, "Foo/A.uasset", a, b,
+                         launcher=lambda cmd: pytest.fail("프로세스를 띄우면 안 된다"),
+                         bridge=br, editor_running=lambda: True)
+    assert "브릿지" in str(ei.value) and br.calls == []
+
+
+def test_open_diff_process_when_editor_off(st: storemod.Store, tmp_path: Path) -> None:
     st.cfg.editor_exe = str(fake_exe(tmp_path))
     a, b = shas(st)
     br = FakeBridge(alive=False)
     r = uediff.open_diff(st, "Foo/A.uasset", a, b, launcher=lambda cmd: 5, bridge=br,
                          editor_running=lambda: False)
     assert r["mode"] == "process" and r["pid"] == 5 and br.calls == [] and r["note"]
+
+
+def test_plan_diff(st: storemod.Store) -> None:
+    on = uediff.plan_diff(st, bridge=FakeBridge(), editor_running=lambda: True)
+    assert on["mode"] == "editor" and on["bridge"] is True and on["hint"] == ""
+    off_bridge = uediff.plan_diff(st, bridge=FakeBridge(alive=False), editor_running=lambda: True)
+    assert off_bridge["mode"] == "editor" and off_bridge["bridge"] is False and "브릿지" in off_bridge["hint"]
+    off = uediff.plan_diff(st, bridge=FakeBridge(), editor_running=lambda: False)
+    assert off["mode"] == "process" and off["editor_running"] is False and "1분" in off["hint"]
+
+
+def test_api_uediff_plan_keys(st: storemod.Store) -> None:
+    p = web.api_uediff_plan(st)
+    assert p["ok"] is True and p["mode"] in ("editor", "process")
+    assert set(p) == {"ok", "mode", "editor_running", "bridge", "hint"}
+
+
+def test_api_uediff_blocked_409(st: storemod.Store, tmp_path: Path) -> None:
+    st.cfg.editor_exe = str(fake_exe(tmp_path))
+    code, payload = web.error_response(uediff.DiffBlocked(uediff.BRIDGE_OFF_HINT))
+    assert code == 409 and payload["ok"] is False and payload["mode"] == "editor"
+    assert "브릿지" in payload["error"]
 
 
 # ---- _JokateDiff 는 절대 추적하지 않는다 ----
