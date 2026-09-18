@@ -65,10 +65,10 @@
   #changes .sum { padding:8px 14px 4px; font-size:12px; color:var(--dim); }
   #changes td, #changes th { padding:5px 8px; font-size:12px; }
   #changes table { table-layout:fixed; }
-  #changes th.cb { width:30px; } #changes th:nth-child(2) { width:38px; } #changes th:nth-child(4) { width:112px; }
-  #changes td:nth-child(5), #changes th:nth-child(5) { display:none; }
+  #changes th.cb { width:30px; } #changes th.tn { width:36px; } #changes th:nth-child(3) { width:36px; } #changes th:nth-child(5) { width:112px; }
+  #changes td:nth-child(6), #changes th:nth-child(6) { display:none; }
   #changes td .rel, #detail td .rel { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #changes td:nth-child(3) { overflow:hidden; }
+  #changes td:nth-child(4) { overflow:hidden; }
   #changes .badge { white-space:nowrap; }
   #tlcard { flex:1 1 auto; }
   #timeline { overflow:auto; flex:1; padding:6px 0 12px; position:relative; }
@@ -92,6 +92,17 @@
   .snap.noise.sel { opacity:.9; }
   .hidden-noise { margin:4px 14px 4px 40px; padding:5px 10px; font-size:11px; color:var(--dim); border:1px dashed var(--line2); border-radius:8px; cursor:pointer; }
   .hidden-noise:hover { color:var(--fg2); border-color:var(--dim2); }
+  .snap .hits { font-size:11px; color:var(--acc2); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* ---------- 검색 ---------- */
+  #tlcard .ph input { flex:1; min-width:60px; padding:4px 10px; font-size:12px; border-radius:8px; }
+  #qinfo { white-space:nowrap; }
+
+  /* ---------- 행 썸네일 ---------- */
+  td.tn, th.tn { width:36px; padding-right:0; }
+  .th28 { width:28px; height:28px; border-radius:7px; display:grid; place-items:center; object-fit:cover;
+          background:rgba(255,255,255,.04); border:1px solid var(--line); font-size:12px; font-weight:700; color:#0b0e14; }
+  tr.row.match td:first-child { box-shadow:inset 3px 0 0 var(--acc); }
 
   /* ---------- 배지·필 ---------- */
   .pill { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; background:rgba(255,255,255,.06); color:var(--fg2); }
@@ -197,7 +208,9 @@
   /* ---------- 토스트 ---------- */
   #toast { position:fixed; right:20px; bottom:20px; z-index:60; display:flex; flex-direction:column; gap:8px; }
   #toast div { background:rgba(19,24,34,.95); border:1px solid rgba(61,220,132,.5); border-left:4px solid var(--a); border-radius:10px; padding:10px 16px; box-shadow:var(--shadow); animation:toastin .2s ease-out, fade 4.2s forwards; font-weight:500; }
+  #toast div { display:flex; align-items:center; gap:10px; }
   #toast div.bad { border-color:rgba(255,93,108,.5); border-left-color:var(--d); }
+  #toast div.keep { animation:toastin .2s ease-out, fade 10s forwards; }
   @keyframes toastin { from { transform:translateX(24px); } to { transform:none; } }
   @keyframes fade { 0%,85% { opacity:1; } 100% { opacity:0; } }
 
@@ -232,7 +245,7 @@
       <div id="changesBody"><p class="dim" style="padding:12px 14px">불러오는 중…</p></div>
     </div>
     <div id="tlcard" class="card">
-      <div class="ph"><b>타임라인</b><span class="spacer"></span><span class="hint">라벨 = 밝은 점 · 자동 = 흐린 점</span></div>
+      <div class="ph"><b>타임라인</b><input id="q" placeholder="애셋·클래스·메시지 검색  /" maxlength="80"><button id="qclear" class="ghost small" style="display:none" title="검색 해제 (Esc)">✕</button><span class="hint" id="qinfo">라벨 = 밝은 점 · 자동 = 흐린 점</span></div>
       <div id="timeline"></div>
     </div>
   </div>
@@ -245,6 +258,7 @@
 const KIND = {added:'추가', modified:'수정', resave:'리세이브', moved:'이동', deleted:'삭제'};
 const ORDER = ['modified','added','moved','deleted','resave'];
 let selected = null, selectedRel = null, headId = null, lastLog = [];
+let searchHits = null, searchTimer = null;   // searchHits: Map<snapshot id, {matched, by}> · null = 검색 안 함
 const NOISE_KEY = 'jokate.showNoise';
 let showNoise = localStorage.getItem(NOISE_KEY) === '1';
 
@@ -262,9 +276,30 @@ async function api(path, opt) {
   if (!r.ok) { const e = new Error(j.error || String(r.status)); e.status = r.status; e.body = j; throw e; }
   return j;
 }
-function toast(msg, bad) {
-  const d = document.createElement('div'); d.textContent = msg; if (bad) d.className = 'bad';
-  $('#toast').appendChild(d); setTimeout(() => d.remove(), 4400);
+function toast(msg, bad, action) {
+  const d = document.createElement('div'); if (bad) d.className = 'bad';
+  const sp = document.createElement('span'); sp.textContent = msg; d.appendChild(sp);
+  let ms = 4400;
+  if (action) {   // 액션 토스트만 10초 유지
+    d.classList.add('keep'); ms = action.ms || 10000;
+    const b = document.createElement('button');
+    b.className = 'ghost small'; b.textContent = action.label;
+    b.onclick = () => { d.remove(); action.run(); };
+    d.appendChild(b);
+  }
+  $('#toast').appendChild(d); setTimeout(() => d.remove(), ms);
+}
+// 행 썸네일 (실패 시 클래스 해시 색 + 첫 글자 플레이스홀더)
+function thumbHtml(cls, src) {
+  const c = cls || '?';
+  if (!src) return `<span class="th28" style="background:hsl(${hue(c)} 45% 38%)">${esc(c.slice(0, 1))}</span>`;
+  return `<img class="th28" loading="lazy" src="${src}" alt="" data-cls="${esc(c)}" onerror="thumbFail(this)">`;
+}
+function thumbFail(img) {
+  const c = img.dataset.cls || '?';
+  const s = document.createElement('span');
+  s.className = 'th28'; s.style.background = `hsl(${hue(c)} 45% 38%)`; s.textContent = c.slice(0, 1);
+  img.replaceWith(s);
 }
 function countsText(c) {
   return ORDER.filter(k => c[k]).map(k => `${KIND[k]} ${c[k]}`).join(' · ') || '변경 없음';
@@ -406,8 +441,10 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if ($('#ctx').style.display === 'block') { closeMenu(); return; }
     if (modalOpen()) { closeModal(); return; }
+    if ($('#q').value.trim()) { clearSearch(); if (e.target === $('#q')) $('#q').blur(); return; }
     selectAll('changes', false); selectAll('detail', false); return;
   }
+  if (e.key === '/' && !inInput && !modalOpen()) { e.preventDefault(); $('#q').focus(); $('#q').select(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && !inInput && !modalOpen()) {
     e.preventDefault(); selectAll(activeList, true);
   }
@@ -427,6 +464,7 @@ async function loadLog() {
 function renderTimeline() {
   const tl = $('#timeline');
   tl.innerHTML = lastLog.length ? '' : '<div class="empty" style="padding:30px;text-align:center" ><div class="dim">아직 스냅샷이 없습니다<br><span class="hint">위에서 메시지를 적고 "스냅샷 만들기"</span></div></div>';
+  if (searchHits && !searchHits.size) tl.innerHTML = '<div class="empty" style="padding:30px;text-align:center"><div class="dim">일치하는 스냅샷 없음</div></div>';
   let hidden = [];
   const flush = () => {
     if (!hidden.length) return;
@@ -437,19 +475,54 @@ function renderTimeline() {
     tl.appendChild(div); hidden = [];
   };
   for (const s of lastLog) {
-    if (s.all_noise && !showNoise && s.id !== selected) { hidden.push(s.id); continue; }
+    const hit = searchHits ? searchHits.get(s.id) : null;
+    if (searchHits && !hit) continue;
+    if (!searchHits && s.all_noise && !showNoise && s.id !== selected) { hidden.push(s.id); continue; }
     flush();
     const div = document.createElement('div');
     div.className = `snap ${s.kind}` + (s.all_noise ? ' noise' : '') + (s.id === selected ? ' sel' : '');
     div.dataset.id = s.id;
     div.innerHTML = `<div class="msg"><span class="id">#${s.id}</span>${esc(s.message || (s.kind === 'auto' ? '자동 저장' : ''))}${s.all_noise ? ' <span class="badge noise">리세이브만</span>' : ''}</div>
       <div class="meta">${esc(s.time)} · ${s.total}개 추적</div>
-      <div class="counts">${pills(s.counts)}</div><div>${badges(s.by_class)}</div>`;
+      <div class="counts">${pills(s.counts)}</div><div>${badges(s.by_class)}</div>` + hitsHtml(hit);
     div.onclick = () => select(s.id);
     tl.appendChild(div);
   }
   flush();
 }
+// ---- 검색 ----
+const QHINT = '라벨 = 밝은 점 · 자동 = 흐린 점';
+function hitsHtml(hit) {
+  if (!hit) return '';
+  if (!hit.matched.length) return '<div class="hits">메시지 일치</div>';
+  const names = hit.matched.slice(0, 3).map(r => r.slice(r.lastIndexOf('/') + 1));
+  const more = hit.matched.length - names.length;
+  return `<div class="hits">${esc(names.join(' · '))}${more > 0 ? ` 외 ${more}개` : ''}</div>`;
+}
+function matchedSet() {
+  const hit = (searchHits && selected != null) ? searchHits.get(selected) : null;
+  return new Set(hit ? hit.matched : []);
+}
+function paintMatches() {
+  const s = matchedSet();
+  document.querySelectorAll('#detail tr.row').forEach(tr => tr.classList.toggle('match', s.has(tr.dataset.rel)));
+}
+async function runSearch() {
+  const q = $('#q').value.trim();
+  $('#qclear').style.display = q ? '' : 'none';
+  if (!q) { searchHits = null; $('#qinfo').textContent = QHINT; renderTimeline(); paintMatches(); return; }
+  try {
+    const r = await api('/api/search?q=' + encodeURIComponent(q));
+    if (r.q !== $('#q').value.trim().toLowerCase()) return;   // 늦게 온 응답 무시
+    searchHits = new Map(r.snapshots.map(s => [s.id, s]));
+    $('#qinfo').textContent = `${r.snapshots.length}개 일치`;
+    renderTimeline(); paintMatches();
+  } catch (e) { $('#qinfo').textContent = '검색 오류: ' + e.message; }
+}
+function clearSearch() { $('#q').value = ''; runSearch(); }
+$('#q').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 250); };
+$('#qclear').onclick = clearSearch;
+
 function setShowNoise(on) {
   showNoise = !!on; localStorage.setItem(NOISE_KEY, showNoise ? '1' : '0');
   $('#showNoiseCb').checked = showNoise; renderTimeline();
@@ -465,27 +538,33 @@ async function loadStatus() {
     const total = rs.length;
     $('#stChanges').innerHTML = total ? `${total}<small>${countsText(d.counts)}</small>` : '0<small>깨끗함</small>';
     if (!total) { body.innerHTML = '<div class="empty" style="padding:24px;text-align:center"><div class="dim">✓ 올릴 변경 없음</div></div>'; sel.changes.clear(); paintSel('changes'); return; }
-    body.innerHTML = `<div class="sum">${pills(d.counts)} &nbsp;${badges(d.by_class)}</div>` + diffTable(d, 'changes', false);
+    body.innerHTML = `<div class="sum">${pills(d.counts)} &nbsp;${badges(d.by_class)}</div>` + diffTable(d, 'changes', false, 'rel');
     bindList('changes');
   } catch (e) { body.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
 function rows(d) {
   const out = [];
-  for (const x of d.modified) if (!x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${fmtB(x.old.size)} → ${fmtB(x.new.size)}`]);
-  for (const x of d.added) out.push(['A', x.rel, x.cls, fmtB(x.size)]);
-  for (const x of d.moved) out.push(['R', x.new.rel, x.new.cls, `← ${x.old.rel}`]);
-  for (const x of d.deleted) out.push(['D', x.rel, x.cls, fmtB(x.size)]);
-  for (const x of d.modified) if (x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${fmtB(x.new.size)} · 리세이브만`, true]);
+  for (const x of d.modified) if (!x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${fmtB(x.old.size)} → ${fmtB(x.new.size)}`, false, x.new.sha]);
+  for (const x of d.added) out.push(['A', x.rel, x.cls, fmtB(x.size), false, x.sha]);
+  for (const x of d.moved) out.push(['R', x.new.rel, x.new.cls, `← ${x.old.rel}`, false, x.new.sha]);
+  for (const x of d.deleted) out.push(['D', x.rel, x.cls, fmtB(x.size), false, x.sha]);
+  for (const x of d.modified) if (x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${fmtB(x.new.size)} · 리세이브만`, true, x.new.sha]);
   return out;
 }
-function diffTable(d, listName, withClass = true) {
+// thumbBy: 'sha' = store 객체(스냅샷 상세·모달), 'rel' = 작업 트리 현재 파일(변경사항 패널, 삭제 행은 sha)
+function thumbSrc(thumbBy, k, rel, sha) {
+  if (thumbBy === 'rel' && k !== 'D') return '/api/thumb?rel=' + encodeURIComponent(rel);
+  return sha ? '/api/thumb?sha=' + sha : '';
+}
+function diffTable(d, listName, withClass = true, thumbBy = 'sha') {
   const rs = rows(d);
   if (!rs.length) return '<p class="dim">변경 없음</p>';
   let h = '<table><tr>' + (listName ? '<th class="cb"><input type="checkbox" class="selall" title="전체 선택/해제"></th>' : '') +
-    `<th></th><th>애셋${listName ? ' <span class="selcount"></span>' : ''}</th><th>클래스</th><th></th></tr>`;
-  for (const [k, rel, cls, extra, noise] of rs)
+    `<th class="tn"></th><th></th><th>애셋${listName ? ' <span class="selcount"></span>' : ''}</th><th>클래스</th><th></th></tr>`;
+  for (const [k, rel, cls, extra, noise, sha] of rs)
     h += `<tr class="${listName ? 'row' : ''}${noise ? ' noise' : ''}" data-rel="${esc(rel)}">` + (listName ? `<td class="cb"><input type="checkbox" tabindex="-1" ${sel[listName].has(rel) ? 'checked' : ''}></td>` : '') +
+      `<td class="tn">${thumbHtml(cls, thumbSrc(thumbBy, k, rel, sha))}</td>` +
       `<td class="k ${k}" title="${noise ? '리세이브만(헤더만 변경)' : KIND[{A:'added',M:'modified',R:'moved',D:'deleted'}[k]]}"><span>${k}${noise ? '~' : ''}</span></td><td>${relHtml(rel)}</td><td>${clsBadge(cls)}</td><td class="dim">${esc(extra)}</td></tr>`;
   h += '</table>';
   if (d.counts && d.counts.resave) h += `<div class="hint">리세이브만 ${d.counts.resave}${d.all_noise ? ' · 이 변경은 전부 리세이브만' : ''}</div>`;
@@ -511,6 +590,7 @@ async function select(id) {
       <div id="restore"><button id="preview" class="ghost">⟲ 이 스냅샷 전체로 되돌리기…</button></div>
       <div id="history"></div></div>`;
     bindList('detail', tr => showHistory(tr.dataset.rel, tr));
+    paintMatches();
     $('#preview').onclick = () => restoreFlow(id, []);
   } catch (e) { det.innerHTML = `<div class="dbody"><div class="err">${esc(e.message)}</div></div>`; }
 }
@@ -592,7 +672,8 @@ async function applyRestore(id, assets, discard) {
   try {
     const r = await api('/api/restore/' + id, {method: 'POST', headers: JSONH, body: JSON.stringify({assets, discard_dirty: discard})});
     closeModal();
-    toast(`롤백 완료 #${r.result.id} · 안전 스냅샷 #${r.safety.id} · 복사 ${r.written} · 삭제 ${r.deleted}`);
+    toast(`롤백 완료 #${r.result.id} · 안전 스냅샷 #${r.safety.id} · 복사 ${r.written} · 삭제 ${r.deleted}`,
+      false, {label: '실행 취소', ms: 10000, run: () => undoRestore(r.safety.id, assets)});
     await loadLog(); await loadStatus(); await select(r.result.id);
   } catch (e) {
     const dirty = (e.status === 409 && e.body && Array.isArray(e.body.dirty)) ? e.body.dirty : [];
@@ -602,6 +683,20 @@ async function applyRestore(id, assets, discard) {
       $('#rdiscard').onclick = () => applyRestore(id, assets, true);
     } else box.innerHTML = `<div class="err">${esc(e.message)}</div>`;
     btn.disabled = false; btn.textContent = '되돌리기';
+  }
+}
+
+// 롤백 실행 취소: 확인 모달 없이 안전 스냅샷으로 되돌린다. 실패(409 등)는 기존 모달 흐름으로
+async function undoRestore(safetyId, assets) {
+  status('실행 취소 중…');
+  try {
+    const r = await api('/api/restore/' + safetyId, {method: 'POST', headers: JSONH, body: JSON.stringify({assets, discard_dirty: false})});
+    toast(`실행 취소 완료 #${r.result.id}`);
+    await loadLog(); await loadStatus(); await select(r.result.id);
+    status(`실행 취소 완료 #${r.result.id}`);
+  } catch (e) {
+    status('실행 취소 실패: ' + e.message);
+    restoreFlow(safetyId, assets);
   }
 }
 

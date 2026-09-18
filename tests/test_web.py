@@ -128,6 +128,43 @@ def test_api_thumb(st: storemod.Store) -> None:
     assert web.api_thumb(st, "0" * 64) is None  # 객체 없음
 
 
+def test_api_search(st: storemod.Store) -> None:
+    # 애셋 이름: A 는 #1 추가 · #2 수정 → 둘 다 일치 (최신순)
+    r = web.api_search(st, "a.uasset")
+    assert [x["id"] for x in r["snapshots"]] == [2, 1] and r["q"] == "a.uasset"
+    assert "Foo/A.uasset" in r["snapshots"][0]["matched"] and r["snapshots"][0]["by"] == "asset"
+    # 대소문자 무시
+    assert [x["id"] for x in web.api_search(st, "FOO/B")["snapshots"]] == [2]
+    assert [x["id"] for x in web.api_search(st, "foo/b")["snapshots"]] == [2]
+    # 메시지
+    m = web.api_search(st, "fir")["snapshots"]
+    assert [x["id"] for x in m] == [1] and m[0]["by"] == "message" and m[0]["matched"] == []
+    # 클래스(가짜 바이너리는 '?')
+    c = web.api_search(st, "?")["snapshots"]
+    assert [x["id"] for x in c] == [2, 1] and c[0]["by"] == "class"
+    # 빈 q
+    assert web.api_search(st, "")["snapshots"] == [] and web.api_search(st, "   ")["q"] == ""
+    # 없는 것
+    assert web.api_search(st, "zzz")["snapshots"] == []
+    # 변경 안 된 애셋은 그 스냅샷에서 일치하지 않음
+    (st.cfg.content / "Foo" / "A.uasset").write_bytes(b"AAAA-v3")
+    st.snap("third")
+    assert [x["id"] for x in web.api_search(st, "b.uasset")["snapshots"]] == [2]
+    assert [x["id"] for x in web.api_search(st, "a.uasset")["snapshots"]] == [3, 2, 1]
+    assert len(web.api_search(st, "a.uasset", limit=2)["snapshots"]) == 2
+
+
+def test_api_thumb_rel(st: storemod.Store) -> None:
+    web._thumb_cache.clear()
+    assert web.api_thumb(st, rel="../../etc/passwd.uasset") is None
+    assert web.api_thumb(st, rel="Foo/../../x.uasset") is None
+    assert web._thumb_cache == {}                       # 탈출은 캐시도 안 함
+    assert web.api_thumb(st, rel="Nope.uasset") is None  # 파일 없음
+    assert web.api_thumb(st, rel="Foo/A.uasset") is None  # 가짜 바이너리 → 썸네일 없음
+    assert len(web._thumb_cache) == 1                   # rel+mtime+size 키로 캐시
+    assert next(iter(web._thumb_cache)).startswith("rel:")
+
+
 def test_api_status_and_snap_only(st: storemod.Store) -> None:
     assert web.api_status(st)["diff"]["counts"] == {"added": 0, "modified": 0, "resave": 0, "moved": 0, "deleted": 0}
     foo = st.cfg.content / "Foo"

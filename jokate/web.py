@@ -8,6 +8,8 @@ JSON API
   GET  /api/snap/<id>                show 와 동일한 diff (A/M/R/D + 클래스별)
   GET  /api/asset?rel=<rel>          애셋 버전 히스토리 (스냅샷별 sha·size·변경여부, 최신순)
   GET  /api/thumb?sha=<sha>          store 객체의 첫 썸네일 (image/jpeg|png, 없으면 404, 메모리 캐시)
+  GET  /api/thumb?rel=<rel>          작업 트리(Content/<rel>) 현재 파일의 첫 썸네일 (경로 탈출 404)
+  GET  /api/search?q=<q>             애셋·클래스·메시지 부분일치(대소문자 무시) 스냅샷 검색
   GET  /api/restore/<id>?asset=<rel> plan_restore 드라이런 (diff + broken + dependents). 적용 없음
   GET  /api/status                   HEAD 대비 아직 올리지 않은 변경 {diff}
   GET  /api/daemon                   {running, paused, pid, port, started, last_line}
@@ -93,6 +95,46 @@ def api_log(store: Store) -> list[dict]:
         item["all_noise"] = d.all_noise
         out.append(item)
     return out
+
+
+def api_search(store: Store, q: str, limit: int = 200) -> dict:
+    """애셋 rel·클래스·스냅샷 메시지 부분일치(대소문자 무시)로 스냅샷 검색(최신순).
+
+    각 스냅샷은 '직전 대비 diff 에 포함된' 애셋만 본다(변경 없는 애셋은 일치하지 않음).
+    트리는 api_log 처럼 한 번만 읽어 캐시를 공유한다.
+    """
+    needle = (q or "").strip().lower()
+    if not needle:
+        return {"q": "", "snapshots": []}
+    trees: dict[int | None, dict[str, TreeEntry]] = {None: {}}
+    out: list[dict] = []
+    for s in store.log():
+        for sid in (s.id, s.parent):
+            if sid not in trees:
+                trees[sid] = store.tree(sid)
+        d = diff_trees(trees[s.parent], trees[s.id])
+        entries: list[TreeEntry] = [*d.added, *d.deleted]
+        for o, n in (*d.modified, *d.moved):
+            entries += [n, o]
+        matched: list[str] = []
+        seen: set[str] = set()
+        by_cls = False
+        for e in entries:
+            hit_rel = needle in e.rel.lower()
+            hit_cls = needle in (e.cls or "?").lower()   # 미지 클래스는 UI 와 같게 '?'
+            if (hit_rel or hit_cls) and e.rel not in seen:
+                seen.add(e.rel)
+                matched.append(e.rel)
+                by_cls = by_cls or (hit_cls and not hit_rel)
+        hit_msg = needle in (s.message or "").lower()
+        if not matched and not hit_msg:
+            continue
+        by = "message" if not matched else ("class" if by_cls and not any(
+            needle in r.lower() for r in matched) else "asset")
+        out.append({"id": s.id, "matched": matched, "by": by})
+        if len(out) >= limit:
+            break
+    return {"q": needle, "snapshots": out}
 
 
 def api_snap(store: Store, sid: int) -> dict:
@@ -194,24 +236,48 @@ _thumb_cache: dict[str, tuple[str, bytes] | None] = {}
 _thumb_lock = threading.Lock()
 
 
-def api_thumb(store: Store, sha: str) -> tuple[str, bytes] | None:
-    """(content-type, bytes) 또는 None. 결과(없음 포함)는 메모리 캐시."""
+def _read_thumb(p: Path) -> tuple[str, bytes] | None:
+    try:
+        pkg = read_package(p, thumbnails=True)
+        for t in pkg.thumbnails:
+            if t.fmt in ("png", "jpeg"):
+                return ("image/" + t.fmt, t.data)
+    except Exception:
+        return None
+    return None
+
+
+def api_thumb(store: Store, sha: str = "", rel: str = "") -> tuple[str, bytes] | None:
+    """(content-type, bytes) 또는 None. rel 은 작업 트리(Content/<rel>)의 현재 파일.
+
+    결과(없음 포함)는 메모리 캐시. rel 캐시 키는 rel+mtime+size, 경로 탈출은 None.
+    """
+    if rel:
+        r = rel.replace("\\", "/").strip("/")
+        base = store.cfg.content.resolve()
+        try:
+            p = (base / r).resolve()
+            p.relative_to(base)
+        except (ValueError, OSError):
+            return None
+        if not p.is_file():
+            return None
+        stt = p.stat()
+        key = f"rel:{p}:{stt.st_mtime_ns}:{stt.st_size}"
+        with _thumb_lock:
+            if key in _thumb_cache:
+                return _thumb_cache[key]
+        result = _read_thumb(p)
+        with _thumb_lock:
+            _thumb_cache[key] = result
+        return result
     if not sha or any(c not in "0123456789abcdef" for c in sha.lower()):
         return None
     with _thumb_lock:
         if sha in _thumb_cache:
             return _thumb_cache[sha]
-    result: tuple[str, bytes] | None = None
     p = store.object_path(sha)
-    if p.exists():
-        try:
-            pkg = read_package(p, thumbnails=True)
-            for t in pkg.thumbnails:
-                if t.fmt in ("png", "jpeg"):
-                    result = ("image/" + t.fmt, t.data)
-                    break
-        except Exception:
-            result = None
+    result = _read_thumb(p) if p.exists() else None
     with _thumb_lock:
         _thumb_cache[sha] = result
     return result
@@ -274,9 +340,13 @@ def make_handler(cfg: Config, control=None):
                     if not rel:
                         raise ValueError("rel 필요")
                     self._json(self._run(lambda st: api_asset(st, rel)))
+                elif path == "/api/search":
+                    term = q.get("q", [""])[0]
+                    self._json(self._run(lambda st: api_search(st, term)))
                 elif path == "/api/thumb":
                     sha = q.get("sha", [""])[0]
-                    r = self._run(lambda st: api_thumb(st, sha))
+                    trel = q.get("rel", [""])[0]
+                    r = self._run(lambda st: api_thumb(st, sha, trel))
                     if r is None:
                         raise NotFound("썸네일 없음")
                     self._send(200, r[1], r[0])
