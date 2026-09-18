@@ -196,7 +196,8 @@ def cmd_restore(a: argparse.Namespace) -> int:
         print(e, file=sys.stderr)
         return 2
     reload = f", 에디터 reload {r.reloaded}개" if r.reloaded is not None else ""
-    print(f"안전 스냅샷 #{r.safety.id} ({r.safety.message}) → 파일 {r.written}개 씀, {r.deleted}개 삭제{reload}"
+    tag = "안전 스냅샷" if r.safety_created else "되돌리기 전 상태"
+    print(f"{tag} #{r.safety.id} ({r.safety.message}) → 파일 {r.written}개 씀, {r.deleted}개 삭제{reload}"
           f" → 스냅샷 #{r.result.id} ({r.result.message})  ({time.time() - t0:.1f}s)")
     return 0
 

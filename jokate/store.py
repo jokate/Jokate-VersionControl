@@ -308,7 +308,10 @@ class Store:
 
     def apply_restore(self, plan: "RestorePlan", *, check_editor: bool = True,
                       discard_dirty: bool = False) -> "RestoreResult":
-        """계획 적용: 안전 스냅샷 → 파일 복사/삭제 → 결과 스냅샷.
+        """계획 적용: 안전 스냅샷(되돌릴 애셋만) → 파일 복사/삭제 → 결과 스냅샷(되돌릴 애셋만).
+
+        두 스냅샷 모두 '이번 롤백이 건드리는 rel' 만 담는 부분 스냅샷이라, 롤백과 무관한 애셋의
+        올리지 않은 변경은 롤백 뒤에도 '현재 변경사항' 으로 남는다.
 
         에디터 실행 중이면 브릿지(jokate.bridge)가 살아 있어야 하고, 대상 패키지가 dirty 면 중단
         (discard_dirty=True 면 통과). 파일 적용 후 에디터에 reload 요청.
@@ -342,7 +345,18 @@ class Store:
             if dirty and not discard_dirty:
                 raise RestoreBlocked("에디터에 저장 안 된 패키지가 있다 (저장하거나 --discard-dirty):\n  "
                                      + "\n  ".join(dirty), dirty=dirty)
-        safety, _, _ = self.snap(f"롤백 직전 #{sid}", kind="auto", force=True)
+        # 이번 롤백이 실제로 건드리는 rel 만 스냅샷에 담는다 (무관한 애셋의 올리지 않은 변경은 그대로 둔다)
+        affected = _affected_rels(plan.diff)
+        head = self.head()
+        head_tree = self.tree(head.id if head else None)
+        work_now = self._work_tree()
+        only_before = [r for r in affected if r in work_now or r in head_tree]
+        safety = None
+        if only_before:
+            safety, _, _ = self.snap(f"롤백 직전 #{sid}", kind="auto", only=only_before)
+        safety_created = safety is not None
+        if safety is None:   # 되돌릴 애셋의 디스크 상태가 HEAD 그대로 → HEAD 가 곧 '롤백 직전'
+            safety = head if head is not None else self.head()
         written = 0
         for rel in to_write:
             e = plan.result[rel]
@@ -352,12 +366,12 @@ class Store:
             shutil.copyfile(self.object_path(e.sha), tmp)
             tmp.replace(dst)
             written += 1
-        deleted = 0
+        deleted_files = 0
         for rel in to_delete:
             p = self.cfg.content / rel
             if p.exists():
                 p.unlink()
-                deleted += 1
+                deleted_files += 1
         reloaded: int | None = None
         if use_bridge and pkgs:
             try:
@@ -368,8 +382,17 @@ class Store:
                 raise RuntimeError(f"파일은 적용됐지만 에디터 reload 실패: {r.get('error')} "
                                    f"dirty={r.get('dirty') or []} — 에디터를 재시작하라")
             reloaded = int(r.get("reloaded") or 0)
-        result, _, _ = self.snap(f"롤백: #{sid}", kind="label", force=True)
-        return RestoreResult(safety=safety, result=result, written=written, deleted=deleted, reloaded=reloaded)
+        head2 = self.head()
+        tree2 = self.tree(head2.id if head2 else None)
+        work2 = self._work_tree()
+        only_after = [r for r in affected if r in work2 or r in tree2]
+        result = None
+        if only_after:
+            result, _, _ = self.snap(f"롤백: #{sid}", kind="label", only=only_after)
+        if result is None:   # 이론상 없음 (바뀐 게 없으면 plan.diff 가 비었다)
+            result = self.head()
+        return RestoreResult(safety=safety, result=result, written=written, deleted=deleted_files,
+                             reloaded=reloaded, safety_created=safety_created)
 
     # ---- 정리(보관기간·묶기·GC) ----
     def delete_snapshots(self, ids: list[int]) -> int:
@@ -576,6 +599,17 @@ class RestoreResult:
     written: int
     deleted: int
     reloaded: int | None = None   # 브릿지로 에디터에 reload 한 패키지 수 (에디터 안 켜져 있으면 None)
+    safety_created: bool = True   # 안전 스냅샷을 새로 만들었나 (False 면 safety 는 롤백 직전 HEAD)
+
+
+def _affected_rels(d: Diff) -> list[str]:
+    """롤백이 실제로 건드리는 rel 집합 (modified·added(부활)·deleted + moved 의 old/new)."""
+    rels = {n.rel for _, n in d.modified}
+    rels |= {e.rel for e in d.added} | {e.rel for e in d.deleted}
+    for o, n in d.moved:
+        rels.add(o.rel)
+        rels.add(n.rel)
+    return sorted(rels)
 
 
 def _pkg_of(rel: str) -> str:

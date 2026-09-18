@@ -228,7 +228,8 @@ def api_restore_apply(store: Store, sid: int, assets: list[str] | None = None,
     plan = store.plan_restore(sid, assets or None)
     r = store.apply_restore(plan, discard_dirty=discard_dirty)
     return {"ok": True, "safety": _snapshot(r.safety), "result": _snapshot(r.result),
-            "written": r.written, "deleted": r.deleted, "reloaded": r.reloaded}
+            "written": r.written, "deleted": r.deleted, "reloaded": r.reloaded,
+            "safety_created": r.safety_created}
 
 
 def api_squash(store: Store, ids: list[int], message: str, include_labels: bool = False) -> dict:

@@ -166,7 +166,7 @@ def format_preview(preview, sid, max_rows=12):
         lines.append("참조 경고 %d건" % len(warns))
         lines.extend("  " + w for w in warns[:5])
     lines.append("")
-    lines.append("되돌리기 직전 안전 스냅샷이 자동 생성됩니다.")
+    lines.append("되돌릴 애셋의 현재 상태만 안전 스냅샷으로 남습니다. 다른 애셋의 올리지 않은 변경은 그대로 유지됩니다.")
     return "\n".join(lines)
 
 
@@ -184,10 +184,14 @@ def format_blocked(body):
 
 
 def format_result(body):
-    """성공 본문 → '롤백 완료 #N · 안전 스냅샷 #M · 복사 a · 삭제 b'."""
+    """성공 본문 → '롤백 완료 #N · 안전 스냅샷 #M · 복사 a · 삭제 b'.
+
+    safety_created 가 false 면 새 스냅샷을 만들지 않은 것이라 '되돌리기 전 상태 #M' 으로 쓴다.
+    """
     body = body or {}
-    return "롤백 완료 #%s · 안전 스냅샷 #%s · 복사 %s · 삭제 %s" % (
-        (body.get("result") or {}).get("id"), (body.get("safety") or {}).get("id"),
+    tag = "안전 스냅샷" if body.get("safety_created", True) else "되돌리기 전 상태"
+    return "롤백 완료 #%s · %s #%s · 복사 %s · 삭제 %s" % (
+        (body.get("result") or {}).get("id"), tag, (body.get("safety") or {}).get("id"),
         body.get("written", 0), body.get("deleted", 0))
 
 

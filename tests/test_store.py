@@ -53,13 +53,12 @@ def test_restore_roundtrip(project: Path) -> None:
     assert (content / "Foo" / "C.uasset").read_bytes() == b"CCCC"
     assert not list(content.rglob("*.jokate-tmp"))
     assert r.written == 2 and r.deleted == 2
-    # 안전 스냅샷(auto, 롤백 직전) + 결과 스냅샷(label, 롤백)
-    assert r.safety.id == 3 and r.safety.kind == "auto" and r.safety.message == "롤백 직전 #1"
-    assert r.result.id == 4 and r.result.kind == "label" and r.result.message == "롤백: #1"
-    assert {e.sha for e in st.tree(3).values()} == {e.sha for e in st.tree(2).values()}
-    assert {(e.rel, e.sha) for e in st.tree(4).values()} == {(e.rel, e.sha) for e in st.tree(1).values()}
-    # 안전 스냅샷으로 다시 되돌리면 원상복구
-    st.apply_restore(st.plan_restore(3), check_editor=False)
+    # 되돌릴 애셋들의 디스크 상태가 HEAD 그대로였으므로 안전 스냅샷은 새로 안 만든다 (HEAD 가 곧 직전 상태)
+    assert r.safety.id == 2 and r.safety_created is False
+    assert r.result.id == 3 and r.result.kind == "label" and r.result.message == "롤백: #1"
+    assert {(e.rel, e.sha) for e in st.tree(3).values()} == {(e.rel, e.sha) for e in st.tree(1).values()}
+    # 롤백 직전 상태로 다시 되돌리면 원상복구
+    st.apply_restore(st.plan_restore(2), check_editor=False)
     assert (content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v2"
     assert (content / "Foo" / "B.uasset").exists()
     st.close()
@@ -100,6 +99,53 @@ def test_restore_partial_keeps_unsnapshotted_asset(project: Path) -> None:
     # 결과 스냅샷의 모든 트리 항목은 객체가 실제로 존재한다
     for e in st.tree(r.result.id).values():
         assert st.object_path(e.sha).exists(), e.rel
+    # A 의 올리지 않은 수정은 롤백 뒤에도 '현재 변경사항' 으로 남는다
+    d = st.status()
+    assert [n.rel for _, n in d.modified] == ["Foo/A.uasset"] and not d.added and not d.deleted
+    # 안전/결과 스냅샷의 A 는 HEAD 버전 sha 그대로(수정본 sha 아님)
+    head_a = st.tree(2)["Foo/A.uasset"].sha
+    assert r.safety_created is False and r.safety.id == 2
+    assert st.tree(r.result.id)["Foo/A.uasset"].sha == head_a
+    st.close()
+
+
+def test_restore_safety_records_only_target_dirty(project: Path) -> None:
+    """되돌릴 애셋(B)에 올리지 않은 수정이 있으면 안전 스냅샷에 그 수정본이 기록되고 실행 취소로 복원된다."""
+    content = project / "Content"
+    st = storemod.Store(cfgmod.load(project))
+    (content / "Foo" / "B.uasset").write_bytes(b"BBBB-v1")
+    st.snap("first")
+    (content / "Foo" / "B.uasset").write_bytes(b"BBBB-v2")
+    st.snap("second")
+    (content / "Foo" / "A.uasset").write_bytes(b"AAAA-dirty")   # 무관한 애셋
+    (content / "Foo" / "B.uasset").write_bytes(b"BBBB-dirty")   # 되돌릴 애셋의 올리지 않은 수정
+
+    n_before = len(st.log())
+    r = st.apply_restore(st.plan_restore(1, ["Foo/B.uasset"]), check_editor=False)
+    assert r.safety_created is True and len(st.log()) == n_before + 2
+    assert (content / "Foo" / "B.uasset").read_bytes() == b"BBBB-v1"
+    safety_tree = st.tree(r.safety.id)
+    assert safety_tree["Foo/A.uasset"].sha == st.tree(2)["Foo/A.uasset"].sha   # A 는 HEAD 그대로
+    assert st.object_path(safety_tree["Foo/B.uasset"].sha).read_bytes() == b"BBBB-dirty"
+    # 실행 취소: 안전 스냅샷으로 되돌리면 올리지 않았던 수정본까지 복원
+    st.apply_restore(st.plan_restore(r.safety.id, ["Foo/B.uasset"]), check_editor=False)
+    assert (content / "Foo" / "B.uasset").read_bytes() == b"BBBB-dirty"
+    assert (content / "Foo" / "A.uasset").read_bytes() == b"AAAA-dirty"
+    st.close()
+
+
+def test_restore_no_dirty_target_skips_safety(project: Path) -> None:
+    """되돌릴 애셋에 올리지 않은 수정이 없으면 안전 스냅샷을 새로 만들지 않는다 (스냅샷 +1)."""
+    content = project / "Content"
+    st = storemod.Store(cfgmod.load(project))
+    st.snap("first")
+    (content / "Foo" / "A.uasset").write_bytes(b"AAAA-v2")
+    st.snap("second")
+    head = st.head()
+    n_before = len(st.log())
+    r = st.apply_restore(st.plan_restore(1, ["Foo/A.uasset"]), check_editor=False)
+    assert r.safety_created is False and r.safety.id == head.id
+    assert len(st.log()) == n_before + 1 and r.result.id == head.id + 1
     st.close()
 
 

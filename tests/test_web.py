@@ -185,7 +185,8 @@ def test_api_status_and_snap_only(st: storemod.Store) -> None:
 def test_api_restore_apply(st: storemod.Store, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(storemod, "editor_running", lambda: False)
     r = web.api_restore_apply(st, 1, ["Foo/A.uasset"], False)
-    assert r["ok"] is True and r["safety"]["id"] == 3 and r["result"]["id"] == 4
+    assert r["ok"] is True and r["safety"]["id"] == 2 and r["result"]["id"] == 3
+    assert r["safety_created"] is False   # 되돌릴 애셋에 올리지 않은 변경이 없었다
     assert r["written"] == 1 and r["deleted"] == 0 and r["reloaded"] is None
     assert (st.cfg.content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v1"
     assert (st.cfg.content / "Foo" / "B.uasset").exists()   # 나머지는 유지

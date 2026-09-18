@@ -59,14 +59,14 @@ python -m jokate daemon-stop <project>                                # 돌고 �
 - 목록 항목을 클릭하면 하단에 그 애셋의 버전 히스토리 + 버전별 썸네일(패키지 헤더의 첫 썸네일)
 - 상단 메시지 입력 + '스냅샷 만들기'(label), 왼쪽 상단 '현재 변경사항' 패널(HEAD 대비 아직 올리지 않은 A/M/R/D, 30초 자동 갱신), 우클릭 메뉴로 부분 올리기·되돌리기 (아래 'UI 조작')
 - JSON API: `GET /api/log`, `GET /api/status`, `GET /api/snap/<id>`, `GET /api/asset?rel=`, `GET /api/thumb?sha=|?rel=`, `GET /api/search?q=`, `GET /api/restore/<id>[?asset=]`, `POST /api/snap {message, only?:[rel]}`, `POST /api/restore/<id> {assets?:[rel], discard_dirty?:bool}`
-- `POST /api/restore/<id>` 는 plan_restore→apply_restore 실행. 성공 `{ok:true, safety, result, written, deleted}`; 에디터 dirty·브릿지 없음으로 중단되면 409 `{ok:false, error, dirty:[...]}` (`store.RestoreBlocked`), 객체 유실(`FileNotFoundError`)도 409 `{ok:false, error}`, 그 외 500.
+- `POST /api/restore/<id>` 는 plan_restore→apply_restore 실행. 성공 `{ok:true, safety, result, written, deleted, safety_created}`; 에디터 dirty·브릿지 없음으로 중단되면 409 `{ok:false, error, dirty:[...]}` (`store.RestoreBlocked`), 객체 유실(`FileNotFoundError`)도 409 `{ok:false, error}`, 그 외 500.
 
 ## UI 조작
 
 - 선택: 애셋 목록(현재 변경사항 패널, 스냅샷 상세)에서 클릭 토글 · Shift 범위 · Ctrl 추가 · 헤더 체크박스 전체 선택/해제 · Ctrl+A 전체 · Esc 해제. 선택 수는 헤더 옆에 표시
 - 현재 변경사항 패널 우클릭: '선택한 것만 올리기'(메시지 모달 → `POST /api/snap {only}`), '전부 올리기', '선택한 것 되돌리기 — 마지막 스냅샷 상태로'
 - 스냅샷 상세 우클릭: '선택한 애셋을 이 시점으로 되돌리기', '이 스냅샷 전체로 되돌리기'. 애셋 히스토리 카드 우클릭: '이 버전으로 되돌리기'
-- 되돌리기는 항상 드라이런 확인 모달을 먼저 띄운다: 변경 목록(M/A/R/D) + 클래스별 집계 + 참조 경고(빨강) + '되돌리기 직전 안전 스냅샷이 자동 생성됩니다'. 확인하면 `POST /api/restore/<id>` 적용 → '롤백 완료 #N · 안전 스냅샷 #M' 토스트, 타임라인·변경사항 갱신
+- 되돌리기는 항상 드라이런 확인 모달을 먼저 띄운다: 변경 목록(M/A/R/D) + 클래스별 집계 + 참조 경고(빨강) + '되돌릴 애셋의 현재 상태만 안전 스냅샷으로 남습니다. 다른 애셋의 올리지 않은 변경은 그대로 유지됩니다'. 확인하면 `POST /api/restore/<id>` 적용 → '롤백 완료 #N · 안전 스냅샷 #M'(safety_created=false 면 '되돌리기 전 상태 #M') 토스트, 타임라인·변경사항 갱신
 - 에디터에 저장 안 한 변경(dirty)으로 409 가 오면 모달에 dirty 목록과 '저장 안 한 변경 버리고 진행' 버튼(`discard_dirty:true` 재요청). 그 외 오류는 모달에 메시지
 - 검색: 타임라인 헤더 입력창(`/` 키로 포커스, 250ms 디바운스 → `GET /api/search?q=`)에 애셋·클래스·메시지를 넣으면 일치하는 스냅샷만 남고 헤더에 'n개 일치'. 각 항목에 일치한 애셋 이름 최대 3개. ✕ 버튼·Esc 로 해제. 검색 중 스냅샷을 열면 상세 목록에서 일치한 행 왼쪽에 accent 막대
 - 행 썸네일: 스냅샷 상세·롤백 확인 모달은 `/api/thumb?sha=`, 현재 변경사항 패널은 `/api/thumb?rel=`(삭제 행은 HEAD sha). 28px 둥근 사각, `loading=lazy`, 없으면 클래스 해시 색 + 첫 글자 플레이스홀더
@@ -133,7 +133,8 @@ python -m jokate daemon-stop <project>                                # 돌고 �
 - 기본은 드라이런: 되돌릴 애셋(M 수정 되돌림 / A 부활 / R 이동 / D 삭제) 목록 + 클래스별 집계 + 참조 검산만 출력. 아무것도 바꾸지 않는다
 - `--asset rel` 을 주면 그 애셋들만 스냅샷 시점으로, 나머지는 현재 상태 유지 (반복 가능)
 - 참조 검산: 결과 트리 각 애셋의 `/Game/` 의존성이 결과 트리·vendor·현재 디스크 어디에도 없으면 "깨질 참조", 롤백으로 사라지는 애셋을 참조하는 authored 애셋은 별도 경고
-- `--apply` 순서: ① auto 스냅샷 `롤백 직전 #<id>` (안전망, 변경 없어도 생성) ② 객체를 `Content/` 로 복사(tmp→replace) ③ 결과 트리에 없는 authored 파일 삭제 ④ label 스냅샷 `롤백: #<id>`
+- `--apply` 순서: ① auto 부분 스냅샷 `롤백 직전 #<id>` (되돌릴 애셋만, 안전망) ② 객체를 `Content/` 로 복사(tmp→replace) ③ 결과 트리에 없는 authored 파일 삭제 ④ label 부분 스냅샷 `롤백: #<id>` (되돌릴 애셋만)
+- 두 스냅샷은 이번 롤백이 건드리는 rel(modified·부활·삭제·이동의 old/new)만 담는 부분 스냅샷이다 → 롤백과 무관한 애셋의 올리지 않은 변경은 롤백 뒤에도 '현재 변경사항' 에 그대로 남는다. 되돌릴 애셋의 디스크 상태가 HEAD 와 같으면 안전 스냅샷을 새로 만들지 않고 HEAD 를 직전 상태로 쓴다(`RestoreResult.safety_created=False`, API 응답·CLI·토스트는 '되돌리기 전 상태 #M')
 - 객체 존재 검사는 실제로 디스크에 쓸 항목(복사 대상)에만 한다. 현재 상태 그대로 유지되는 항목은 객체가 없어도(수정만 하고 스냅샷 안 한 애셋) 부분 롤백이 통과한다. 대상 객체가 유실됐으면 아무것도 바꾸기 전에 `FileNotFoundError` (웹 API 409)
 - `UnrealEditor.exe` 가 실행 중이면 에디터 브릿지가 필요하다 (아래). 브릿지가 없으면 `--apply` 거부
 - 롤백도 되돌릴 수 있다: `restore <project> <안전 스냅샷 id> --apply`

@@ -872,7 +872,7 @@ async function restoreFlow(id, assets) {
   if (p.dependents.length) html += refList('롤백으로 사라지는 애셋을 참조', p.dependents);
   if (p.broken.length) html += refList('깨질 참조', p.broken);
   if (n && !p.dependents.length && !p.broken.length) html += '<p class="ok">✓ 참조 검산: 이상 없음</p>';
-  html += '<div class="note">🛡 되돌리기 직전 안전 스냅샷이 자동 생성됩니다. 롤백도 그 스냅샷으로 다시 되돌릴 수 있습니다.</div>';
+  html += '<div class="note">🛡 되돌릴 애셋의 현재 상태만 안전 스냅샷으로 남습니다. 다른 애셋의 올리지 않은 변경은 그대로 유지됩니다.</div>';
   html += `<div id="restoreErr"></div><div class="btns"><button id="rcancel" class="ghost">취소</button><button id="rok" class="danger" ${n ? '' : 'disabled'}>${n ? `되돌리기 (${n}개 변경)` : '변경 없음'}</button></div>`;
   openModal(html);
   $('#rcancel').onclick = closeModal;
@@ -884,7 +884,8 @@ async function applyRestore(id, assets, discard) {
   try {
     const r = await api('/api/restore/' + id, {method: 'POST', headers: JSONH, body: JSON.stringify({assets, discard_dirty: discard})});
     closeModal();
-    toast(`롤백 완료 #${r.result.id} · 안전 스냅샷 #${r.safety.id} · 복사 ${r.written} · 삭제 ${r.deleted}`,
+    const safetyTag = (r.safety_created === false) ? '되돌리기 전 상태' : '안전 스냅샷';
+    toast(`롤백 완료 #${r.result.id} · ${safetyTag} #${r.safety.id} · 복사 ${r.written} · 삭제 ${r.deleted}`,
       false, {label: '실행 취소', ms: 10000, run: () => undoRestore(r.safety.id, assets)});
     await loadLog(); await loadStatus(); await select(r.result.id);
   } catch (e) {

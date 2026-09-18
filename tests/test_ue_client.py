@@ -128,7 +128,8 @@ def test_format_preview():
     assert "R A/Old.uasset → A/New.uasset" in lines
     assert "D Blueprint/BP_Gone.uasset" in lines
     assert "참조 경고 2건" in lines
-    assert lines[-1] == "되돌리기 직전 안전 스냅샷이 자동 생성됩니다."
+    assert lines[-1] == ("되돌릴 애셋의 현재 상태만 안전 스냅샷으로 남습니다. "
+                         "다른 애셋의 올리지 않은 변경은 그대로 유지됩니다.")
 
 
 def test_format_preview_row_limit():
@@ -144,6 +145,9 @@ def test_format_blocked_and_result():
     assert b.count("/Game/Foo/A") == 10 and "… 외 2개" in b
     r = jc.format_result({"ok": True, "result": {"id": 9}, "safety": {"id": 8}, "written": 3, "deleted": 1})
     assert r == "롤백 완료 #9 · 안전 스냅샷 #8 · 복사 3 · 삭제 1"
+    r2 = jc.format_result({"ok": True, "result": {"id": 9}, "safety": {"id": 8}, "written": 3, "deleted": 1,
+                           "safety_created": False})
+    assert r2 == "롤백 완료 #9 · 되돌리기 전 상태 #8 · 복사 3 · 삭제 1"
 
 
 def test_connection_refused():
