@@ -245,6 +245,17 @@
   #metadiff .arrow { color:var(--dim2); margin:0 4px; }
   #metadiff .cols { display:flex; gap:6px; flex-wrap:wrap; margin:4px 0 8px; }
   #metadiff .same { color:var(--dim); font-size:12px; margin-top:4px; }
+  #metadiff .pkey { font-family:ui-monospace, Consolas, monospace; font-size:12.5px; color:var(--fg2); }
+  #metadiff .val { font-family:ui-monospace, Consolas, monospace; font-size:12.5px; cursor:pointer; }
+  #metadiff .val.clip { max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block; vertical-align:bottom; }
+  #metadiff details.raw { margin-top:8px; }
+  #metadiff details.raw summary { cursor:pointer; color:var(--dim); font-size:12px; }
+  #metadiff pre.t3d { margin:6px 0 0; padding:6px 8px; background:var(--panel); border:1px solid var(--line2);
+                      border-radius:6px; max-height:360px; overflow:auto;
+                      font-family:ui-monospace, Consolas, monospace; font-size:12px; line-height:1.45; }
+  #metadiff pre.t3d .ln { color:var(--dim2); user-select:none; margin-right:8px; }
+  #metadiff pre.t3d .dl.add { background:rgba(61,220,132,.12); color:var(--a); display:block; }
+  #metadiff pre.t3d .dl.del { background:rgba(255,93,108,.12); color:var(--d); display:block; }
   .ver .meta { color:var(--a); font-size:11px; }
 
   /* ---------- 알림 박스 ---------- */
@@ -942,14 +953,40 @@ function metaTable(diff, cols) {
     h += `<tr class="mrow del"><td class="rname">− ${esc(r.row)}</td>` + cols.map(c => metaCell(r.cells[c] ?? '')).join('') + '</tr>';
   return h + '</table>';
 }
+function propRow(cls, key, oldV, newV) {
+  const cell = (v, k) => v === null ? '<span class="dim">·</span>'
+    : `<span class="val clip ${k}" title="클릭하면 전체" onclick="this.classList.toggle('clip')">${esc(v || '(빈 값)')}</span>`;
+  return `<tr class="mrow ${cls}"><td class="pkey">${esc(key)}</td><td>${cell(oldV, 'old')}` +
+         (oldV !== null && newV !== null ? '<span class="arrow">→</span>' : '') +
+         `${newV !== null ? cell(newV, 'new') : ''}</td></tr>`;
+}
+function propsTable(p) {
+  const n = p.changed.length + p.added.length + p.removed.length;
+  if (!n) return '<p class="dim">속성 변경 없음</p>';
+  let h = '<table><tr><th>속성</th><th>이전 → 새 값</th></tr>';
+  for (const x of p.changed) h += propRow('', x.key, x.old, x.new);
+  for (const x of p.added) h += propRow('add', '+ ' + x.key, null, x.new);
+  for (const x of p.removed) h += propRow('del', '− ' + x.key, x.old, null);
+  return h + '</table>';
+}
+function rawDiff(d) {
+  let h = `<details class="raw"><summary>원문 diff (+${d.added} / −${d.removed}${d.truncated ? ', 일부 생략' : ''})</summary><pre class="t3d">`;
+  for (const l of d.lines) {
+    const cls = l.op === '+' ? 'dl add' : l.op === '-' ? 'dl del' : 'dl';
+    const no = l.op === '+' ? l.b_no : l.a_no;
+    h += `<span class="${cls}"><span class="ln">${String(no || '').padStart(4, ' ')}</span>${esc(l.op + ' ' + l.text)}</span>`;
+  }
+  return h + '</pre></details>';
+}
 async function showMetaDiff(box, aSha, bSha) {
-  const head = '<div class="sect"><h3>내용 변경</h3><span class="hint">DataTable 값 비교</span></div>';
+  const head = '<div class="sect"><h3>내용 변경</h3><span class="hint">애셋 속성 값 비교</span></div>';
   box.innerHTML = head + '<p class="dim">불러오는 중…</p>';
   let r;
   try { r = await api(`/api/metadiff?a=${aSha || ''}&b=${bSha}`); }
   catch (e) { box.innerHTML = head + `<div class="err">${esc(e.message)}</div>`; return; }
   if (!r.available) { box.innerHTML = head + `<div class="note">${META_HINT}</div>`; return; }
   const d = r.diff;
+  if (r.kind === 'Text') { box.innerHTML = head + propsTable(r.props) + rawDiff(d); return; }
   const cols = [];
   for (const row of d.rows_changed) for (const c of row.cells) if (!cols.includes(c.col)) cols.push(c.col);
   for (const row of [...d.rows_added, ...d.rows_removed]) for (const c of Object.keys(row.cells)) if (!cols.includes(c)) cols.push(c);
@@ -995,8 +1032,9 @@ async function showHistory(rel, tr, snapDiff) {
         ${depsPill(v)}${depsHtml(v) ? depsHtml(v).replace('<div class="deplist"', '<div class="deplist" hidden') : ''}</div>`;
     }
     h.innerHTML = '<div id="metadiff"></div>' + html + '</div>';
-    // 이 스냅샷에서 DataTable 이 수정된 행이면 직전 버전과 내용 비교
-    const mod = (snapDiff && snapDiff.modified || []).find(x => x.new.rel === rel && (x.new.cls === 'DataTable'));
+    // 이 스냅샷에서 수정됐고 내용 기록(사이드카)이 있는 행이면 직전 버전과 내용 비교
+    const mod = (snapDiff && snapDiff.modified || []).find(x => x.new.rel === rel &&
+      versions.some(v => v.sha === x.new.sha && v.has_meta));
     if (mod) {
       const i = versions.findIndex(v => v.id === selected);
       const prev = i >= 0 ? versions.slice(i + 1).find(v => v.sha) : null;

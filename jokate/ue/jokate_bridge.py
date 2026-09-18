@@ -15,8 +15,10 @@ HTTP 는 반드시 백그라운드 스레드에서: 되돌리기 요청은 서�
 되돌리기 흐름: 메뉴 → (워커) revert_preview → (틱) 드라이런 확인창 YES/NO → (워커) revert POST
 → (틱) 완료 창 / 409 면 '저장 안 한 변경을 버릴까요?' 확인 후 discard_dirty 재요청. 모달은 틱에서만 띄운다.
 """
+import fnmatch
 import json
 import os
+import re
 import queue
 import threading
 import time
@@ -438,8 +440,72 @@ def _table_from_columns(dt):
     return columns, rows
 
 
+DEFAULT_TEXT_CLASSES = ["*DataAsset", "CurveFloat", "CurveTable",
+                        "InputAction", "InputMappingContext", "YS*"]
+EXCLUDED_CLASSES = ["Blueprint", "*Blueprint", "Material*", "Texture*", "*Mesh",
+                    "Anim*", "World", "Level", "*Sequence"]
+MAX_TEXT_BYTES = 512 * 1024
+
+
+def _is_text_class(cls, text_classes):
+    """클래스 이름이 T3D 텍스트 방식 대상인지. 기본 패턴만 걸리면 제외 목록을 적용한다."""
+    if not cls:
+        return False
+    pats = list(text_classes or DEFAULT_TEXT_CLASSES)
+    hit = [p for p in pats if fnmatch.fnmatch(cls, p)]
+    if cls.endswith("DataAsset") and not hit:
+        hit = ["*DataAsset"]
+    if not hit:
+        return False
+    if all(p in DEFAULT_TEXT_CLASSES for p in hit):
+        for ex in EXCLUDED_CLASSES:
+            if fnmatch.fnmatch(cls, ex):
+                return False
+    return True
+
+
+def _meta_tmp_dir():
+    d = os.path.join(unreal.Paths.project_saved_dir(), "JokateMeta")
+    d = d.replace("\\", "/")
+    if not os.path.isdir(d):
+        os.makedirs(d)
+    return d
+
+
+def _export_t3d(asset, name, max_bytes):
+    """애셋을 T3D 텍스트로 임시 파일에 내보내 읽고 파일을 지운다. (text, err)."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", name.strip("/"))
+    path = "%s/%s.t3d" % (_meta_tmp_dir(), safe)
+    try:
+        task = unreal.AssetExportTask()
+        task.set_editor_property("object", asset)
+        task.set_editor_property("filename", path)
+        task.set_editor_property("automated", True)
+        task.set_editor_property("prompt", False)
+        task.set_editor_property("replace_identical", True)
+        task.set_editor_property("exporter", unreal.ObjectExporterT3D())
+        ok = unreal.Exporter.run_asset_export_task(task)
+        if not ok or not os.path.exists(path):
+            return "", "T3D 내보내기 실패"
+        size = os.path.getsize(path)
+        if size > max_bytes:
+            return "", "너무 큼(%d바이트 > %d)" % (size, max_bytes)
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read(), None
+    except Exception as e:  # noqa: BLE001
+        return "", "%s: %s" % (type(e).__name__, e)
+    finally:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+
+
 def _op_export_meta(packages, args):
-    """DataTable 내용을 JSON 으로 뽑는다. dirty(저장 안 됨)면 건너뛴다."""
+    """DataTable 은 JSON 표로, 그 밖의 대상 클래스는 T3D 텍스트로 뽑는다. dirty 면 건너뛴다."""
+    text_classes = list(args.get("text_classes") or DEFAULT_TEXT_CLASSES)
+    max_bytes = int(args.get("max_bytes") or MAX_TEXT_BYTES)
     dirty = set(_dirty_names(packages))
     meta = {}
     skipped = []
@@ -453,8 +519,23 @@ def _op_export_meta(packages, args):
         except Exception as e:  # noqa: BLE001
             errors[name] = "load 실패: %s" % e
             continue
-        if asset is None or not isinstance(asset, unreal.DataTable):
+        if asset is None:
             skipped.append(name)
+            continue
+        if not isinstance(asset, unreal.DataTable):
+            cls = ""
+            try:
+                cls = asset.get_class().get_name()
+            except Exception:  # noqa: BLE001
+                cls = ""
+            if not _is_text_class(cls, text_classes):
+                skipped.append(name)
+                continue
+            text, err = _export_t3d(asset, name, max_bytes)
+            if err:
+                errors[name] = err
+                continue
+            meta[name] = {"kind": "Text", "cls": cls, "text": text}
             continue
         row_struct = ""
         try:

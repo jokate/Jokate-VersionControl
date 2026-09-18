@@ -150,3 +150,134 @@ def test_gc_removes_orphan_meta(st) -> None:
     r = st.gc()
     assert tuple(r)[0] >= 0 and r.meta == 1
     assert metamod.has_meta(st, live) and not metamod.has_meta(st, orphan)
+
+
+# ---- 텍스트(T3D) 방식 ----
+T3D_A = """Begin Object Class=/Script/MNYS.YSAbilityDataAsset Name="ABILDATA_Test"
+   BasicAttackAbilities(0)=(AbilityClass="/Game/A.A_C")
+   Cooldown=1.500000
+   ExportPath="/Temp/JokateMeta/x1.t3d"
+   Guid=0123456789ABCDEF0123456789ABCDEF
+End Object
+"""
+T3D_B = """Begin Object Class=/Script/MNYS.YSAbilityDataAsset Name="ABILDATA_Test"\r
+   BasicAttackAbilities(0)=(AbilityClass="/Game/A.A_C")\r
+   BasicAttackAbilities(1)=(AbilityClass="/Game/B.B_C")\r
+   Cooldown=2.000000\r
+   ExportPath="/Temp/JokateMeta/x2.t3d"\r
+   Guid=FEDCBA9876543210FEDCBA9876543210\r
+End Object\r
+"""
+
+
+def _txt(text):
+    return {"kind": "Text", "cls": "YSAbilityDataAsset", "text": text}
+
+
+def test_normalize_t3d() -> None:
+    a, b = metamod.normalize_t3d(T3D_A), metamod.normalize_t3d(T3D_B)
+    assert "Cooldown=1.500000" in a and not a.endswith("\n")
+    assert "\r" not in b
+    assert 'ExportPath="<PATH>"' in a and 'ExportPath="<PATH>"' in b   # 임시 이름 마스킹
+    assert "Guid=<GUID>" in a and "Guid=<GUID>" in b                   # 매번 달라지는 값
+    assert a.splitlines()[0].startswith("Begin Object") and a.splitlines()[-1] == "End Object"
+    assert metamod.normalize_t3d("") == ""
+
+
+def test_diff_text() -> None:
+    d = metamod.diff_text(_txt(T3D_A), _txt(T3D_B))
+    assert {l["op"] for l in d["lines"]} == {" ", "+", "-"}
+    assert d["added"] == 2 and d["removed"] == 1     # 배열 항목 추가 + Cooldown 변경
+    plus = [l["text"].strip() for l in d["lines"] if l["op"] == "+"]
+    assert 'BasicAttackAbilities(1)=(AbilityClass="/Game/B.B_C")' in plus
+    assert all(l["a_no"] and l["b_no"] for l in d["lines"] if l["op"] == " ")
+    assert metamod.diff_text(_txt(T3D_A), _txt(T3D_A))["added"] == 0   # 잡음만 다르면 변경 없음
+
+
+def test_diff_text_truncates() -> None:
+    a = _txt("\n".join("P%d=0" % i for i in range(300)))
+    b = _txt("\n".join("P%d=1" % i for i in range(300)))
+    d = metamod.diff_text(a, b, max_lines=50)
+    assert d["truncated"] and len(d["lines"]) == 50 and d["added"] == 300
+
+
+def test_summarize_props() -> None:
+    p = metamod.summarize_props(_txt(T3D_A), _txt(T3D_B))
+    changed = {x["key"]: (x["old"], x["new"]) for x in p["changed"]}
+    assert changed["Cooldown"] == ("1.500000", "2.000000")
+    assert [x["key"] for x in p["added"]] == ["BasicAttackAbilities(1)"]   # 배열 인덱스 추가
+    assert p["removed"] == []
+    back = metamod.summarize_props(_txt(T3D_B), _txt(T3D_A))
+    assert [x["key"] for x in back["removed"]] == ["BasicAttackAbilities(1)"]
+    assert metamod.summarize_props(_txt(T3D_A), _txt(T3D_A)) == {"changed": [], "added": [], "removed": []}
+
+
+def test_meta_kind_rules() -> None:
+    assert metamod.meta_kind("DataTable") == "DataTable"
+    assert metamod.meta_kind("YSAbilityDataAsset") == "Text"
+    assert metamod.meta_kind("CurveFloat") == "Text"
+    assert metamod.meta_kind("YSCombatSettings") == "Text"       # YS* 기본 패턴
+    assert metamod.meta_kind("Blueprint") == ""                  # 기본 제외
+    assert metamod.meta_kind("YSCharacterBlueprint") == ""       # 기본 패턴에만 걸리면 제외 우선
+    assert metamod.meta_kind("Material") == "" and metamod.meta_kind("Texture2D") == ""
+    assert metamod.meta_kind("StaticMesh") == "" and metamod.meta_kind("World") == ""
+    assert metamod.meta_kind("") == ""
+    assert metamod.meta_kind("CurveFloat", ["*DataAsset"]) == ""      # config 로 좁히기
+    assert metamod.meta_kind("Blueprint", ["Blueprint"]) == "Text"    # 직접 넣으면 허용
+    assert metamod.meta_kind("MyThing", ["My*"]) == "Text"
+
+
+def test_capture_meta_saves_text(st) -> None:
+    entry = [e for e in st._work_tree().values()][0]
+    entry.cls = "YSAbilityDataAsset"
+    calls = []
+    payload = _txt(T3D_A)
+
+    def fn(cfg, op, packages, args=None, *a, **kw):
+        calls.append((op, list(packages), dict(args or {})))
+        return {"ok": True, "meta": {p: payload for p in packages}, "skipped": [], "errors": {}}
+
+    assert metamod.capture_meta(st, [entry], fn) == (1, 0)
+    assert calls[0][0] == "export_meta" and "*DataAsset" in calls[0][2]["text_classes"]
+    assert metamod.load_meta(st, entry.sha) == payload
+
+
+def test_capture_meta_skips_excluded_class(st) -> None:
+    entry = [e for e in st._work_tree().values()][0]
+    entry.cls = "Blueprint"
+
+    def boom(*a, **kw):
+        raise AssertionError("요청하면 안 된다")
+
+    assert metamod.capture_meta(st, [entry], boom) == (0, 0)
+
+
+def test_api_metadiff_text(st) -> None:
+    a_sha, b_sha = "1a" * 32, "1b" * 32
+    metamod.save_meta(st, a_sha, _txt(T3D_A))
+    metamod.save_meta(st, b_sha, _txt(T3D_B))
+    r = web.api_metadiff(st, a_sha, b_sha)
+    assert r["available"] and r["kind"] == "Text" and r["cls"] == "YSAbilityDataAsset"
+    assert r["props"]["changed"][0]["key"] == "Cooldown"
+    assert r["diff"]["added"] == 2 and r["diff"]["removed"] == 1
+
+
+def test_gc_removes_orphan_text_meta(st) -> None:
+    snap, _, _ = st.snap("first")
+    live = list(st.tree(snap.id).values())[0].sha
+    metamod.save_meta(st, live, _txt(T3D_A))
+    metamod.save_meta(st, "ee" * 32, _txt(T3D_B))
+    r = st.gc()
+    assert r.meta == 1 and metamod.has_meta(st, live)
+
+
+def test_config_text_classes(tmp_path: Path) -> None:
+    root = tmp_path / "P2"
+    (root / "Content").mkdir(parents=True)
+    cfgmod.init(root)
+    assert "*DataAsset" in cfgmod.load(root).text_classes
+    (root / ".jokate" / "config.toml").write_text(
+        '[meta]\ntext_classes = ["Blueprint"]\n', encoding="utf-8")
+    cfg = cfgmod.load(root)
+    assert cfg.text_classes == ["Blueprint"]
+    assert metamod.meta_kind("CurveFloat", cfg.text_classes) == ""

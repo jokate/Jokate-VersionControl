@@ -94,7 +94,7 @@ ignore = ["Developers", "Collections"]
 
 ## 더 깊게 보기
 
-- DataTable 값 diff: 수정된 DataTable 행을 클릭하면 값 변경 표가 뜬다. 에디터가 켜져 있을 때 찍힌 스냅샷부터 기록된다
+- 내용 변경: 수정된 DataTable 행을 클릭하면 값 변경 표가, DataAsset·커브·인풋 같은 일반 애셋은 속성 요약 표(키 · 이전값 → 새값)와 접히는 원문 diff 가 뜬다. 에디터가 켜져 있을 때 찍힌 스냅샷부터 기록된다. 대상 클래스는 `[meta] text_classes` 로 조정한다
 - 참조 변화: 수정·이동된 애셋 행의 '참조 +2 −1' 필을 누르면(또는 올려두면) 새로 생긴/사라진 참조 애셋 목록이 펼쳐진다. 내용 diff 가 없는 DataAsset 도 무엇을 가리키게 됐는지 보인다. vendor 폴더 참조는 `vendor`, 프로젝트에 없는 대상은 `없는 애셋` 표시. CLI `show`/`status` 출력에도 `    + /Game/...` 줄로 같이 나온다
 - UE 에서 diff 열기: 블루프린트처럼 우리 UI 로 못 보는 애셋은 언리얼 에디터 diff 창으로 두 버전을 나란히 연다
 - 자동 스냅샷 묶기·보관기간 정리: 연속된 auto 스냅샷을 하나로 묶고(`squash`), 오래된 auto 를 정리한다(`prune`, 라벨은 안 지움)
@@ -155,6 +155,11 @@ ignore = ["Developers", "Collections"]
 
 [web]
 port = 8765                  # 웹 UI 포트
+
+[meta]
+# '내용 변경' 을 T3D 텍스트로 기록할 클래스 (fnmatch). DataTable 은 항상 표로 기록된다
+# Blueprint·머티리얼·텍스처·메시·애니메이션·레벨은 기본 제외 — 직접 써 넣으면 허용
+text_classes = ["*DataAsset", "CurveFloat", "CurveTable", "InputAction", "InputMappingContext", "YS*"]
 
 [retention]
 auto_days = 14               # 이보다 오래된 auto 스냅샷을 정리 대상으로

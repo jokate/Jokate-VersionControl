@@ -13,7 +13,7 @@
 | `GET /api/asset` | `rel` | 애셋 버전 히스토리(스냅샷별 sha·size·변경여부 + 직전 버전 대비 `deps_added`·`deps_removed`, 최신순) | 400 `rel` 없음 |
 | `GET /api/thumb` | `sha` 또는 `rel` | `image/jpeg`\|`image/png` 바이트 | 404 썸네일 없음·경로 탈출 |
 | `GET /api/search` | `q` | 애셋·클래스·메시지 부분일치(대소문자 무시) 스냅샷 + 일치 애셋 | — |
-| `GET /api/metadiff` | `a`, `b` (sha) | `{available, missing, kind, diff}` DataTable 값 diff | — |
+| `GET /api/metadiff` | `a`, `b` (sha) | `{available, missing, kind, diff}` — kind `DataTable` 은 표 diff, `Text` 는 `{cls, props, diff:{lines,added,removed,truncated}}` | — |
 | `GET /api/restore/<id>` | `asset`(반복 가능) | `plan_restore` 드라이런 `{diff, broken, dependents}`. 적용 없음 | 404 없는 id |
 | `GET /api/status` | — | `{diff}` baseline(마지막으로 올린 상태) 대비 아직 올리지 않은 변경 — 자동 스냅샷이 쌓여도 비지 않는다 | — |
 | `GET /api/revert` | `asset`(반복 가능) | baseline 으로 되돌리기 드라이런 `{snapshot(id=0), diff, broken, dependents}`. 적용 없음 | — |

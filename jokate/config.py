@@ -46,6 +46,11 @@ autostart = true
 # 'UE 에서 diff 열기' 에 쓸 UnrealEditor.exe 경로. 비워 두면 .uproject 의 엔진 버전으로 자동 탐색
 exe = ""
 
+[meta]
+# '내용 변경'(의미 diff) 을 T3D 텍스트로 기록할 애셋 클래스 (fnmatch). DataTable 은 항상 표로 기록
+# Blueprint·머티리얼·텍스처·메시·애니메이션·레벨은 기본 제외 — 여기에 직접 써 넣으면 허용된다
+text_classes = ["*DataAsset", "CurveFloat", "CurveTable", "InputAction", "InputMappingContext", "YS*"]
+
 [retention]
 # 이보다 오래된 자동 스냅샷은 정리 대상 (0 이면 정리 안 함). 라벨 스냅샷은 절대 안 지운다
 auto_days = 14
@@ -53,6 +58,9 @@ auto_days = 14
 keep_last_auto = 30
 """
 DEFAULT_PORT = 8765
+# [meta] text_classes 기본값 (meta.DEFAULT_TEXT_CLASSES 와 같은 목록 — 순환 import 를 피해 여기 둔다)
+DEFAULT_TEXT_CLASSES = ["*DataAsset", "CurveFloat", "CurveTable",
+                        "InputAction", "InputMappingContext", "YS*"]
 
 
 @dataclass
@@ -67,6 +75,8 @@ class Config:
     editor_exe: str = ""       # [editor] exe — UnrealEditor.exe 경로 (빈 문자열이면 자동 탐색)
     auto_days: int = 14        # [retention] auto_days — 자동 스냅샷 보관기간(일, 0=정리 안 함)
     keep_last_auto: int = 30   # [retention] keep_last_auto — 최신 자동 스냅샷 보존 개수
+    # [meta] text_classes — T3D 텍스트로 내용을 기록할 클래스 패턴 (fnmatch)
+    text_classes: list[str] = field(default_factory=lambda: list(DEFAULT_TEXT_CLASSES))
 
     @property
     def state_dir(self) -> Path:
@@ -105,6 +115,7 @@ def load(project: str | Path) -> Config:
         editor_exe=str(data.get("editor", {}).get("exe", "") or "").strip(),
         auto_days=int(data.get("retention", {}).get("auto_days", 14)),
         keep_last_auto=int(data.get("retention", {}).get("keep_last_auto", 30)),
+        text_classes=[str(p) for p in data.get("meta", {}).get("text_classes", DEFAULT_TEXT_CLASSES)],
     )
 
 

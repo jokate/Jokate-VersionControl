@@ -7,7 +7,7 @@
 - `jokate/uasset.py` — 패키지 헤더 파서 (요약·이름·임포트·익스포트·썸네일). UE 4.11 ~ 5.7 검증
 - `jokate/scan.py` — 등급 분류 + 애셋 레코드(클래스·부모·의존성·해시)
 - `jokate/store.py` — 스냅샷 저장소 (내용주소 객체 + SQLite 인덱스, 트리 diff, 롤백)
-- `jokate/meta.py` — 의미 diff 사이드카 (DataTable 값 비교)
+- `jokate/meta.py` — 의미 diff 사이드카 (DataTable 값 표 + 일반 애셋 T3D 텍스트 비교)
 - `jokate/watch.py` — 저장 감지 자동 스냅샷 (폴링 + debounce, `poll_once` 순수 함수)
 - `jokate/daemon.py` — 창 없는 단일 데몬 (웹 + watch 스레드, 상태 파일·로그, pause/resume/stop)
 - `jokate/web.py` + `jokate/web_static/index.html` — 타임라인 웹 UI (API 로직은 `api_*` 순수 함수)
@@ -72,7 +72,9 @@
 
 - `.jokate/store/meta/<sha[:2]>/<sha>.json` = `{kind, row_struct, columns, rows:{행이름:{열:"값"}}}` — 값은 모두 문자열
 - 스냅샷을 찍는 순간(데몬 자동·웹 올리기·CLI `snap`) 브릿지가 살아 있으면 에디터에 로드된 현재 버전을 `export_meta` 로 받아 그 파일의 sha 를 키로 저장한다. 과거 `.uasset` 을 다시 로드하지 않는다
-- 한계: 에디터가 꺼져 있거나 브릿지가 없으면 그 버전은 기록이 없다. dirty 패키지는 건너뛴다. 응답 후 파일 sha 가 달라졌으면 버린다. 두 버전 모두 사이드카가 있어야 비교된다. DataTable 외 클래스는 아직 대상이 아니다
+- 한계: 에디터가 꺼져 있거나 브릿지가 없으면 그 버전은 기록이 없다. dirty 패키지는 건너뛴다. 응답 후 파일 sha 가 달라졌으면 버린다. 두 버전 모두 사이드카가 있어야 비교된다
+- 일반 애셋(Text): 클래스가 `DataAsset` 으로 끝나거나 `[meta] text_classes`(fnmatch) 에 걸리면 `AssetExportTask` + `ObjectExporterT3D` 로 `Saved/JokateMeta/` 에 잠깐 내보내 읽고 파일을 지운다. 사이드카는 `{kind:"Text", cls, text}`, 512KB 초과는 건너뛰고 errors 에 사유. Blueprint·머티리얼·텍스처·메시·애니메이션·레벨은 기본 제외
+- 비교는 `normalize_t3d`(줄 끝 공백·ExportPath·GUID·포인터 마스킹) → `summarize_props`(속성 단위 요약) + `diff_text`(문맥 3줄 줄 diff). gc 의 고아 사이드카 정리는 kind 와 무관
 
 ## 데몬 · watch
 

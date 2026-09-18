@@ -295,7 +295,11 @@ def api_metadiff(store: Store, a_sha: str, b_sha: str) -> dict:
         missing.append("b")
     if missing:
         return {"available": False, "missing": missing, "kind": "", "diff": None}
-    return {"available": True, "missing": [], "kind": b.get("kind", ""),
+    kind = b.get("kind", "")
+    if kind == "Text":
+        return {"available": True, "missing": [], "kind": "Text", "cls": b.get("cls", ""),
+                "props": metamod.summarize_props(a, b), "diff": metamod.diff_text(a, b)}
+    return {"available": True, "missing": [], "kind": kind,
             "row_struct": b.get("row_struct", ""), "diff": metamod.diff_tables(a, b)}
 
 
