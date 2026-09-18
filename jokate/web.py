@@ -10,6 +10,7 @@ JSON API
   GET  /api/thumb?sha=<sha>          store 객체의 첫 썸네일 (image/jpeg|png, 없으면 404, 메모리 캐시)
   GET  /api/thumb?rel=<rel>          작업 트리(Content/<rel>) 현재 파일의 첫 썸네일 (경로 탈출 404)
   GET  /api/search?q=<q>             애셋·클래스·메시지 부분일치(대소문자 무시) 스냅샷 검색
+  GET  /api/metadiff?a=<sha>&b=<sha> 의미 diff (DataTable 수치 변경) {available, missing, kind, diff}
   GET  /api/restore/<id>?asset=<rel> plan_restore 드라이런 (diff + broken + dependents). 적용 없음
   GET  /api/status                   HEAD 대비 아직 올리지 않은 변경 {diff}
   GET  /api/daemon                   {running, paused, pid, port, started, last_line}
@@ -26,15 +27,19 @@ JSON API
 from __future__ import annotations
 
 import json
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from . import meta as metamod
 from .config import Config
 from .store import (Diff, RestoreBlocked, Snapshot, SquashHasLabels, Store, TreeEntry,
                     diff_trees, format_ts)
 from .uasset import read_package
+
+_HEX = re.compile(r"[0-9a-fA-F]+")
 
 STATIC = Path(__file__).parent / "web_static"
 
@@ -163,7 +168,8 @@ def api_asset(store: Store, rel: str) -> dict:
         if state != "absent":
             versions.append({"id": sid, "kind": kind, "message": message, "ts": ts, "time": format_ts(ts),
                              "sha": sha, "size": size, "cls": cls or "?", "state": state,
-                             "changed": state in ("added", "modified", "deleted")})
+                             "changed": state in ("added", "modified", "deleted"),
+                             "has_meta": bool(sha) and metamod.has_meta(store, sha)})
         prev_sha = sha
     versions.reverse()
     return {"rel": rel, "versions": versions}
@@ -186,7 +192,31 @@ def api_snap_create(store: Store, message: str, only: list[str] | None = None) -
     """only 가 비면 전체(변경 없어도 생성). only 가 있으면 부분 스냅샷 — 선택한 것에 변경 없으면 snapshot=None."""
     only = [str(x) for x in (only or []) if str(x).strip()]
     snap, d, stored = store.snap(message, kind="label", force=not only, only=only or None)  # KeyError → 404
+    if snap is not None:
+        metamod.capture_for_snapshot(store, d)
     return {"snapshot": _snapshot(snap) if snap else None, "diff": _diff(d), "stored": stored}
+
+
+def api_metadiff(store: Store, a_sha: str, b_sha: str) -> dict:
+    """두 버전의 사이드카(의미 메타)를 비교. a 가 비면 '새로 추가'로 보고 b 전체를 rows_added 로."""
+    a_sha = (a_sha or "").strip()
+    b_sha = (b_sha or "").strip()
+    for s in (a_sha, b_sha):
+        if s and not _HEX.fullmatch(s):
+            raise ValueError("sha 는 16진수만")
+    if not b_sha:
+        raise ValueError("b 필요")
+    b = metamod.load_meta(store, b_sha)
+    a = metamod.load_meta(store, a_sha) if a_sha else None
+    missing = []
+    if a_sha and a is None:
+        missing.append("a")
+    if b is None:
+        missing.append("b")
+    if missing:
+        return {"available": False, "missing": missing, "kind": "", "diff": None}
+    return {"available": True, "missing": [], "kind": b.get("kind", ""),
+            "row_struct": b.get("row_struct", ""), "diff": metamod.diff_tables(a, b)}
 
 
 def api_restore_apply(store: Store, sid: int, assets: list[str] | None = None,
@@ -375,6 +405,10 @@ def make_handler(cfg: Config, control=None):
                     if not rel:
                         raise ValueError("rel 필요")
                     self._json(self._run(lambda st: api_asset(st, rel)))
+                elif path == "/api/metadiff":
+                    a_sha = q.get("a", [""])[0]
+                    b_sha = q.get("b", [""])[0]
+                    self._json(self._run(lambda st: api_metadiff(st, a_sha, b_sha)))
                 elif path == "/api/search":
                     term = q.get("q", [""])[0]
                     self._json(self._run(lambda st: api_search(st, term)))

@@ -178,6 +178,20 @@
   .ver .sha { font-family:ui-monospace, Consolas, monospace; color:var(--dim); }
   .ver .vmsg { color:var(--fg2); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
+  /* ---------- 의미 diff ---------- */
+  #metadiff { margin-bottom:6px; }
+  #metadiff table { width:100%; }
+  #metadiff td, #metadiff th { padding:4px 8px; }
+  #metadiff .rname { font-weight:700; }
+  #metadiff tr.mrow.add { background:rgba(61,220,132,.10); }
+  #metadiff tr.mrow.del { background:rgba(255,93,108,.10); }
+  #metadiff .old { text-decoration:line-through; color:var(--dim); }
+  #metadiff .new { color:var(--m); font-weight:700; }
+  #metadiff .arrow { color:var(--dim2); margin:0 4px; }
+  #metadiff .cols { display:flex; gap:6px; flex-wrap:wrap; margin:4px 0 8px; }
+  #metadiff .same { color:var(--dim); font-size:12px; margin-top:4px; }
+  .ver .meta { color:var(--a); font-size:11px; }
+
   /* ---------- 알림 박스 ---------- */
   .warn, .err, .note { border-radius:10px; padding:10px 14px; margin:8px 0; font-size:13px; }
   .warn { background:rgba(255,181,71,.1); border:1px solid rgba(255,181,71,.4); }
@@ -700,13 +714,53 @@ async function select(id) {
       ${diffTable(d, 'detail')}
       <div id="restore"><button id="preview" class="ghost">⟲ 이 스냅샷 전체로 되돌리기…</button></div>
       <div id="history"></div></div>`;
-    bindList('detail', tr => showHistory(tr.dataset.rel, tr));
+    bindList('detail', tr => showHistory(tr.dataset.rel, tr, d));
     paintMatches();
     $('#preview').onclick = () => restoreFlow(id, []);
   } catch (e) { det.innerHTML = `<div class="dbody"><div class="err">${esc(e.message)}</div></div>`; }
 }
 
-async function showHistory(rel, tr) {
+// ---- 의미 diff (DataTable 수치 변경) ----
+const META_HINT = '이 버전은 내용 기록이 없습니다 — 에디터가 켜져 있고 브릿지가 연결된 상태에서 찍힌 스냅샷부터 기록됩니다';
+function metaCell(v) { return `<td>${esc(v)}</td>`; }
+function metaTable(diff, cols) {
+  let h = '<table><tr><th>행</th>' + cols.map(c => `<th>${esc(c)}</th>`).join('') + '</tr>';
+  for (const r of diff.rows_changed) {
+    const byCol = {}; for (const c of r.cells) byCol[c.col] = c;
+    h += `<tr class="mrow"><td class="rname">${esc(r.row)}</td>` + cols.map(c => {
+      const x = byCol[c];
+      if (!x) return '<td class="dim">·</td>';
+      return `<td><span class="old">${esc(x.old || '(없음)')}</span><span class="arrow">→</span><span class="new">${esc(x.new || '(없음)')}</span></td>`;
+    }).join('') + '</tr>';
+  }
+  for (const r of diff.rows_added)
+    h += `<tr class="mrow add"><td class="rname">+ ${esc(r.row)}</td>` + cols.map(c => metaCell(r.cells[c] ?? '')).join('') + '</tr>';
+  for (const r of diff.rows_removed)
+    h += `<tr class="mrow del"><td class="rname">− ${esc(r.row)}</td>` + cols.map(c => metaCell(r.cells[c] ?? '')).join('') + '</tr>';
+  return h + '</table>';
+}
+async function showMetaDiff(box, aSha, bSha) {
+  const head = '<div class="sect"><h3>내용 변경</h3><span class="hint">DataTable 값 비교</span></div>';
+  box.innerHTML = head + '<p class="dim">불러오는 중…</p>';
+  let r;
+  try { r = await api(`/api/metadiff?a=${aSha || ''}&b=${bSha}`); }
+  catch (e) { box.innerHTML = head + `<div class="err">${esc(e.message)}</div>`; return; }
+  if (!r.available) { box.innerHTML = head + `<div class="note">${META_HINT}</div>`; return; }
+  const d = r.diff;
+  const cols = [];
+  for (const row of d.rows_changed) for (const c of row.cells) if (!cols.includes(c.col)) cols.push(c.col);
+  for (const row of [...d.rows_added, ...d.rows_removed]) for (const c of Object.keys(row.cells)) if (!cols.includes(c)) cols.push(c);
+  let h = head;
+  if (d.columns_added.length || d.columns_removed.length)
+    h += '<div class="cols">' + d.columns_added.map(c => `<span class="pill added">+ ${esc(c)}</span>`).join('') +
+         d.columns_removed.map(c => `<span class="pill deleted">− ${esc(c)}</span>`).join('') + '</div>';
+  const n = d.rows_changed.length + d.rows_added.length + d.rows_removed.length;
+  h += n ? metaTable(d, cols) : '<p class="dim">값 변경 없음</p>';
+  if (d.unchanged) h += `<div class="same">변경 없는 행 ${d.unchanged}개</div>`;
+  box.innerHTML = h;
+}
+
+async function showHistory(rel, tr, snapDiff) {
   selectedRel = rel;
   document.querySelectorAll('#detail tr.row').forEach(e => e.classList.toggle('hist', e === tr));
   const h = $('#history');
@@ -722,10 +776,17 @@ async function showHistory(rel, tr) {
         : '<div class="nothumb">삭제됨</div>';
       html += `<div class="ver ${v.changed ? 'changed' : ''}" data-id="${v.id}"><div class="th">${thumb}<span class="tag pill ${v.state === 'same' ? '' : v.state}">${esc(KIND[v.state] || '동일')}</span></div>
         <div><span class="vid">#${v.id}</span> <span class="dim">${esc(v.time.slice(5, 16))}</span></div>
-        <div class="sha">${fmtB(v.size)} · ${v.sha ? v.sha.slice(0, 8) : ''}</div>
+        <div class="sha">${fmtB(v.size)} · ${v.sha ? v.sha.slice(0, 8) : ''}${v.has_meta ? ' <span class="meta">내용 기록</span>' : ''}</div>
         <div class="vmsg" title="${esc(v.message)}">${esc(v.message || (v.kind === 'auto' ? '자동 저장' : ''))}</div></div>`;
     }
-    h.innerHTML = html + '</div>';
+    h.innerHTML = '<div id="metadiff"></div>' + html + '</div>';
+    // 이 스냅샷에서 DataTable 이 수정된 행이면 직전 버전과 내용 비교
+    const mod = (snapDiff && snapDiff.modified || []).find(x => x.new.rel === rel && (x.new.cls === 'DataTable'));
+    if (mod) {
+      const i = versions.findIndex(v => v.id === selected);
+      const prev = i >= 0 ? versions.slice(i + 1).find(v => v.sha) : null;
+      showMetaDiff($('#metadiff'), prev ? prev.sha : '', mod.new.sha);
+    }
     h.querySelectorAll('.ver').forEach(card => card.oncontextmenu = e => {
       e.preventDefault();
       const vid = +card.dataset.id;

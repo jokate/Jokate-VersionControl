@@ -252,7 +252,100 @@ def _op_reload(packages, args):
     return {"ok": True, "reloaded": len(loaded), "scanned": folders}
 
 
-_OPS = {"dirty": _op_dirty, "reload": _op_reload}
+def _table_from_json_string(dt):
+    """DataTableFunctionLibrary.export_data_table_to_json_string 경로."""
+    text = unreal.DataTableFunctionLibrary.export_data_table_to_json_string(dt)
+    data = json.loads(text)
+    rows = {}
+    columns = []
+    if isinstance(data, dict):
+        items = [dict(v, Name=k) if isinstance(v, dict) else {"Name": k} for k, v in data.items()]
+    else:
+        items = list(data or [])
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("Name") or item.get("name") or len(rows))
+        cells = {}
+        for k, v in item.items():
+            if k in ("Name", "name"):
+                continue
+            k = str(k)
+            if k not in columns:
+                columns.append(k)
+            cells[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+        rows[name] = cells
+    return columns, rows
+
+
+def _table_from_columns(dt):
+    """get_data_table_row_names + 열 이름 + get_data_table_column_as_string 경로."""
+    names = [str(n) for n in unreal.DataTableFunctionLibrary.get_data_table_row_names(dt)]
+    columns = []
+    for attr in ("get_data_table_column_names", "get_data_table_column_export_names"):
+        if hasattr(unreal.DataTableFunctionLibrary, attr):
+            try:
+                columns = [str(c) for c in getattr(unreal.DataTableFunctionLibrary, attr)(dt)]
+            except Exception:  # noqa: BLE001
+                columns = []
+            if columns:
+                break
+    rows = dict((n, {}) for n in names)
+    for col in columns:
+        try:
+            vals = list(unreal.DataTableFunctionLibrary.get_data_table_column_as_string(dt, col))
+        except Exception:  # noqa: BLE001
+            continue
+        for i, n in enumerate(names):
+            rows[n][col] = str(vals[i]) if i < len(vals) else ""
+    return columns, rows
+
+
+def _op_export_meta(packages, args):
+    """DataTable 내용을 JSON 으로 뽑는다. dirty(저장 안 됨)면 건너뛴다."""
+    dirty = set(_dirty_names(packages))
+    meta = {}
+    skipped = []
+    errors = {}
+    for name in packages:
+        if name in dirty:
+            skipped.append(name)
+            continue
+        try:
+            asset = unreal.EditorAssetLibrary.load_asset(name)
+        except Exception as e:  # noqa: BLE001
+            errors[name] = "load 실패: %s" % e
+            continue
+        if asset is None or not isinstance(asset, unreal.DataTable):
+            skipped.append(name)
+            continue
+        row_struct = ""
+        try:
+            rs = asset.get_editor_property("row_struct")
+            row_struct = rs.get_name() if rs is not None else ""
+        except Exception:  # noqa: BLE001
+            row_struct = ""
+        columns, rows, err = [], {}, None
+        try:
+            if hasattr(unreal, "DataTableFunctionLibrary") and hasattr(
+                    unreal.DataTableFunctionLibrary, "export_data_table_to_json_string"):
+                columns, rows = _table_from_json_string(asset)
+            elif hasattr(unreal, "DataTableFunctionLibrary") and hasattr(
+                    unreal.DataTableFunctionLibrary, "get_data_table_row_names"):
+                columns, rows = _table_from_columns(asset)
+            else:
+                err = "이 엔진 버전에는 DataTable 읽기 API 가 없음"
+        except Exception as e:  # noqa: BLE001
+            err = "%s: %s" % (type(e).__name__, e)
+        if err:
+            errors[name] = err
+            continue
+        meta[name] = {"kind": "DataTable", "row_struct": row_struct,
+                      "columns": columns, "rows": rows}
+    return {"ok": True, "meta": meta, "skipped": skipped, "errors": errors}
+
+
+_OPS = {"dirty": _op_dirty, "reload": _op_reload, "export_meta": _op_export_meta}
 
 
 def _handle_request():

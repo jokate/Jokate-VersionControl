@@ -215,12 +215,32 @@ def retention_loop(cfg: Config, control: "DaemonControl", interval: float = RETE
             break
 
 
+# ---- 의미 diff 사이드카 ----
+def _capture_meta_async(cfg: Config, diff) -> threading.Thread:
+    """스냅샷 직후 에디터에서 DataTable 내용을 받아 사이드카로 저장(폴링 루프를 막지 않게 워커 스레드)."""
+    def work() -> None:
+        from . import meta as metamod
+        st = Store(cfg)
+        try:
+            metamod.capture_for_snapshot(st, diff)
+        except Exception:  # noqa: BLE001  기록 실패는 스냅샷과 무관
+            pass
+        finally:
+            st.close()
+
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    return t
+
+
 # ---- 루프 ----
 def watch_loop(cfg: Config, control: DaemonControl, interval: float = 2.0, debounce: float = 5.0) -> None:
     st = Store(cfg)
     try:
         snap, d, _ = st.snap("")
         control.log(watchmod.format_line(watchmod.PollResult(snap, d)))
+        if snap is not None:
+            _capture_meta_async(cfg, d)
         state = watchmod.WatchState(watchmod.fingerprint(cfg), None)
         while not control.stopping:
             if control.wait_stop(interval):
@@ -229,6 +249,8 @@ def watch_loop(cfg: Config, control: DaemonControl, interval: float = 2.0, debou
                 try:
                     snap, d, _ = st.snap("트레이에서 수동 스냅샷")
                     control.log(watchmod.format_line(watchmod.PollResult(snap, d)))
+                    if snap is not None:
+                        _capture_meta_async(cfg, d)
                     state = watchmod.WatchState(watchmod.fingerprint(cfg), None)
                 except Exception as e:  # noqa: BLE001
                     control.log(f"{format_ts(time.time())}  수동 스냅샷 실패: {type(e).__name__}: {e}")
@@ -241,6 +263,8 @@ def watch_loop(cfg: Config, control: DaemonControl, interval: float = 2.0, debou
                 continue
             if r is not None:
                 control.log(watchmod.format_line(r))
+                if r.snapshot is not None:
+                    _capture_meta_async(cfg, r.diff)
     except Exception as e:  # noqa: BLE001
         control.log(f"{format_ts(time.time())}  watch 중단: {type(e).__name__}: {e}")
     finally:

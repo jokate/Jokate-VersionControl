@@ -95,9 +95,12 @@ def cmd_snap(a: argparse.Namespace) -> int:
     if snap is None:
         print("변경 없음 — 스냅샷을 만들지 않았다")
         return 0
+    from . import meta as metamod
+    saved, _ = metamod.capture_for_snapshot(st, d)
     print(f"snapshot #{snap.id} ({snap.kind}) {snap.message}".rstrip())
     print(storemod.format_diff(d))
-    print(f"새 객체 {stored}개  ({time.time() - t0:.1f}s)")
+    extra = f", 내용 기록 {saved}개" if saved else ""
+    print(f"새 객체 {stored}개{extra}  ({time.time() - t0:.1f}s)")
     return 0
 
 

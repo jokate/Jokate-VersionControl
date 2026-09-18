@@ -472,8 +472,8 @@ class Store:
         self.gc()
         return victims
 
-    def gc(self, dry_run: bool = False, exclude_snapshots: list[int] | None = None) -> tuple[int, int]:
-        """어떤 tree 행도 참조하지 않는 객체 파일 삭제. 반환 (개수, 바이트).
+    def gc(self, dry_run: bool = False, exclude_snapshots: list[int] | None = None) -> "GCResult":
+        """어떤 tree 행도 참조하지 않는 객체 파일 삭제. 반환 (개수, 바이트) + meta (하위 호환 튜플).
 
         exclude_snapshots 의 스냅샷은 '이미 지워졌다' 치고 계산한다(정리 예고용).
         .tmp 잔여물과 빈 하위 폴더도 함께 치운다(개수에는 세지 않음).
@@ -483,8 +483,9 @@ class Store:
         if ex:
             q += " WHERE snapshot_id NOT IN (%s)" % ",".join("?" * len(ex))
         refs = {r[0] for r in self.db.execute(q, ex).fetchall()}
+        metas = self._gc_meta(refs, dry_run)
         if not self.objects.exists():
-            return 0, 0
+            return GCResult(0, 0, metas)
         count = 0
         freed = 0
         for p in list(self.objects.rglob("*")):
@@ -507,10 +508,39 @@ class Store:
                     d.rmdir()
                 except OSError:
                     pass
-        return count, freed
+        return GCResult(count, freed, metas)
+
+    def _gc_meta(self, refs: set[str], dry_run: bool) -> int:
+        """어떤 tree 행도 참조하지 않는 sha 의 의미 diff 사이드카 삭제. 반환 개수."""
+        root = self.cfg.state_dir / "store" / "meta"
+        if not root.exists():
+            return 0
+        n = 0
+        for p in list(root.rglob("*")):
+            if not p.is_file():
+                continue
+            if p.suffix == ".tmp":
+                if not dry_run:
+                    p.unlink(missing_ok=True)
+                continue
+            if p.stem in refs:
+                continue
+            n += 1
+            if not dry_run:
+                p.unlink(missing_ok=True)
+        return n
 
     def close(self) -> None:
         self.db.close()
+
+
+class GCResult(tuple):
+    """(객체 수, 바이트) 튜플 — 하위 호환. .meta 로 지운 사이드카 수."""
+
+    def __new__(cls, count: int, freed: int, meta: int = 0):
+        obj = super().__new__(cls, (count, freed))
+        obj.meta = meta
+        return obj
 
 
 class SquashHasLabels(ValueError):
