@@ -479,6 +479,42 @@ def read_package(path: str | Path, *, thumbnails: bool = False) -> Package:
         return pkg
 
 
+def is_resave_only(old_path: str | Path, new_path: str | Path) -> bool:
+    """두 패키지가 '리세이브만' 관계인지: 이름·임포트·익스포트 표가 같고 각 export 직렬화 바이트가 동일.
+
+    요약 헤더(SavedHash·엔진 버전·썸네일·오프셋)만 다른 경우 True. 파싱 실패·표 불일치는 False.
+    """
+    try:
+        a = read_package(old_path)
+        b = read_package(new_path)
+    except (UAssetError, struct.error, OSError, IndexError):
+        return False
+    if a.names != b.names:
+        return False
+    if len(a.imports) != len(b.imports) or len(a.exports) != len(b.exports):
+        return False
+    for x, y in zip(a.imports, b.imports):
+        if (x.class_package, x.class_name, x.object_name, x.package_name) != \
+           (y.class_package, y.class_name, y.object_name, y.package_name):
+            return False
+    for x, y in zip(a.exports, b.exports):
+        if (x.object_name, a.resolve(x.class_index), x.serial_size) != \
+           (y.object_name, b.resolve(y.class_index), y.serial_size):
+            return False
+    try:
+        with open(old_path, "rb") as fa, open(new_path, "rb") as fb:
+            for x, y in zip(a.exports, b.exports):
+                if x.serial_size <= 0:
+                    continue
+                fa.seek(x.serial_offset)
+                fb.seek(y.serial_offset)
+                if fa.read(x.serial_size) != fb.read(y.serial_size):
+                    return False
+    except OSError:
+        return False
+    return True
+
+
 if __name__ == "__main__":
     import sys
     p = read_package(sys.argv[1], thumbnails=True)
