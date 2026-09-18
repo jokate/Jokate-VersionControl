@@ -207,9 +207,9 @@ def launch(cmd: list[str]) -> int:
     return p.pid
 
 
-def _editor_is_running() -> bool:
+def _editor_is_running(cfg=None) -> bool:
     from .store import editor_running
-    return editor_running()
+    return editor_running(cfg)
 
 
 def open_in_editor(store, rel: str, a_sha: str, b_sha: str | None = None, bridge=None) -> dict:
@@ -253,7 +253,7 @@ def plan_diff(store, bridge=None, editor_running=None) -> dict:
         from . import bridge as bridge  # noqa: PLW0127
     running = editor_running or _editor_is_running
     try:
-        is_running = bool(running())
+        is_running = bool(running(cfg))
     except Exception:  # noqa: BLE001
         is_running = False
     alive = False
@@ -288,7 +288,7 @@ def open_diff(store, rel: str, a_sha: str, b_sha: str | None = None, launcher=No
         from . import bridge as bridge  # noqa: PLW0127
     running = editor_running or _editor_is_running
     try:
-        is_running = bool(running())
+        is_running = bool(running(cfg))
     except Exception as e:  # noqa: BLE001
         is_running, note = False, f"에디터 상태 확인 실패: {type(e).__name__}: {e}"
     else:

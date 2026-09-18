@@ -9,10 +9,10 @@ op 'reload' : args.discard_dirty 가 아니고 dirty 대상이 있으면 {ok:fal
               아니면 존재하는 패키지를 load_package → reload_packages(ASSUME_POSITIVE),
               대상 폴더를 scan_paths_synchronous(force_rescan) 로 추가/삭제 반영 → {ok, reloaded:n}
 
-콘텐츠 브라우저 애셋 우클릭 → 'Jokate' 서브메뉴 (올리기 / 마지막 스냅샷으로 되돌리기 / 히스토리·변경사항 웹).
+콘텐츠 브라우저 애셋 우클릭 → 'Jokate' 서브메뉴 (올리기 / 마지막으로 올린 상태로 되돌리기 / 히스토리·변경사항 웹).
 HTTP 는 반드시 백그라운드 스레드에서: 되돌리기 요청은 서버가 이 브릿지(같은 에디터 틱)에 dirty/reload 를
 물어보므로 게임 스레드에서 동기로 부르면 데드락. 결과는 _RESULTS 큐 → _tick 에서 unreal.log + 모달 창.
-되돌리기 흐름: 메뉴 → (워커) head_id + restore_preview → (틱) 드라이런 확인창 YES/NO → (워커) restore POST
+되돌리기 흐름: 메뉴 → (워커) revert_preview → (틱) 드라이런 확인창 YES/NO → (워커) revert POST
 → (틱) 완료 창 / 409 면 '저장 안 한 변경을 버릴까요?' 확인 후 discard_dirty 재요청. 모달은 틱에서만 띄운다.
 """
 import json
@@ -106,21 +106,17 @@ def _do_snap(base, names, rels):
 
 
 def _do_preview(base, rels):
-    """워커 스레드: HEAD + 드라이런 → 확인창 요청을 큐에 넣는다 (적용하지 않음)."""
-    sid = _client.head_id(base)
-    if sid is None:
-        _alert(RESTORE_TITLE, "스냅샷이 없어 되돌릴 수 없습니다.")
-        return
-    code, j = _client.restore_preview(base, sid, rels)
+    """워커 스레드: baseline 드라이런 → 확인창 요청을 큐에 넣는다 (적용하지 않음)."""
+    code, j = _client.revert_preview(base, rels)
     if code != 200:
         _alert(RESTORE_TITLE, "되돌리기 미리보기 실패 %s: %s" % (code, (j or {}).get("error", j)))
         return
-    _RESULTS.put(("confirm_restore", {"base": base, "sid": sid, "rels": rels, "preview": j}))
+    _RESULTS.put(("confirm_restore", {"base": base, "sid": None, "rels": rels, "preview": j}))
 
 
 def _do_restore(base, sid, rels, discard_dirty=False):
-    """워커 스레드: 실제 적용."""
-    code, j = _client.restore_assets(base, sid, rels, discard_dirty=discard_dirty)
+    """워커 스레드: 실제 적용 (sid 는 쓰지 않는다 — 항상 마지막으로 올린 상태)."""
+    code, j = _client.revert_assets(base, rels, discard_dirty=discard_dirty)
     j = j or {}
     if code == 200 and j.get("ok"):
         _RESULTS.put(("restore_done", {"text": _client.format_result(j)}))
@@ -225,7 +221,7 @@ def _action(kind):
         unreal.log("[jokate] 올리는 중… (%d개)" % len(rels))
         _run_bg(_do_snap, base, names, rels)
     elif kind == "restore":
-        unreal.log("[jokate] 되돌리기 미리보기를 불러오는 중… (%d개)" % len(rels))
+        unreal.log("[jokate] 마지막으로 올린 상태 미리보기를 불러오는 중… (%d개)" % len(rels))
         _run_bg(_do_preview, base, rels)
     elif kind == "history":
         _open_web(asset_rel=rels[0])
@@ -236,10 +232,10 @@ def _action(kind):
 
 MENU_ITEMS = [
     ("snap", "선택한 애셋 올리기(스냅샷)", "선택한 애셋만 부분 스냅샷으로 올립니다"),
-    ("restore", "선택한 애셋을 마지막 스냅샷 상태로 되돌리기", "무엇이 바뀌는지 확인창을 먼저 띄웁니다"),
+    ("restore", "선택한 애셋을 마지막으로 올린 상태로 되돌리기", "무엇이 바뀌는지 확인창을 먼저 띄웁니다"),
     ("history", "히스토리 열기(웹)", "첫 번째 선택 애셋의 버전 히스토리를 브라우저로"),
     ("diff", "직전 스냅샷과 비교(diff)", "첫 번째 선택 애셋의 마지막 스냅샷 버전과 현재 파일을 diff 창으로"),
-    ("status", "현재 변경사항 보기(웹)", "HEAD 대비 올리지 않은 변경"),
+    ("status", "현재 변경사항 보기(웹)", "마지막으로 올린 상태 대비 올리지 않은 변경"),
 ]
 
 # 에디터 상단 '툴(Tools)' 메뉴의 Jokate 섹션
@@ -602,8 +598,8 @@ def _handle_result(kind, payload):
     elif kind == "confirm_restore":
         preview, sid = payload["preview"], payload["sid"]
         if _client.preview_change_count(preview) == 0:
-            unreal.log("[jokate] 이미 마지막 스냅샷 상태")
-            _msg_box(RESTORE_TITLE, "이미 마지막 스냅샷 상태입니다 — 되돌릴 변경이 없습니다.")
+            unreal.log("[jokate] 이미 마지막으로 올린 상태")
+            _msg_box(RESTORE_TITLE, "이미 마지막으로 올린 상태입니다 — 되돌릴 변경이 없습니다.")
             return
         if _msg_box(RESTORE_TITLE, _client.format_preview(preview, sid), yes_no=True):
             unreal.log("[jokate] 되돌리는 중… (%d개)" % len(payload["rels"]))

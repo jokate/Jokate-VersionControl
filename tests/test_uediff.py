@@ -215,7 +215,7 @@ def test_open_diff_in_editor(st: storemod.Store, tmp_path: Path) -> None:
     br = FakeBridge()
     r = uediff.open_diff(st, "Foo/A.uasset", a, None,
                          launcher=lambda cmd: pytest.fail("프로세스를 띄우면 안 된다"),
-                         bridge=br, editor_running=lambda: True)
+                         bridge=br, editor_running=lambda *a, **k: True)
     assert r["mode"] == "editor" and r["strategy"] == "file" and r["pid"] is None
     op, args, timeout = br.calls[0]
     assert op == "diff" and timeout == uediff.DIFF_TIMEOUT
@@ -233,7 +233,7 @@ def test_open_diff_in_editor_two_versions(st: storemod.Store, tmp_path: Path) ->
     a, b = shas(st)
     br = FakeBridge(resp={"ok": True, "strategy": "package"})
     r = uediff.open_diff(st, "Foo/A.uasset", a, b, launcher=lambda cmd: 0, bridge=br,
-                         editor_running=lambda: True)
+                         editor_running=lambda *a, **k: True)
     assert r["mode"] == "editor" and r["strategy"] == "package"
     args = br.calls[0][1]
     assert args["right_package"] == "/Game/_JokateDiff/%s/A" % b[:8]
@@ -248,7 +248,7 @@ def test_open_diff_blocked_when_bridge_op_fails(st: storemod.Store, tmp_path: Pa
     with pytest.raises(uediff.DiffBlocked) as ei:
         uediff.open_diff(st, "Foo/A.uasset", a, b,
                          launcher=lambda cmd: pytest.fail("프로세스를 띄우면 안 된다"),
-                         bridge=br, editor_running=lambda: True)
+                         bridge=br, editor_running=lambda *a, **k: True)
     assert "로드 실패" in str(ei.value) and "package" in str(ei.value)
 
 
@@ -259,7 +259,7 @@ def test_open_diff_blocked_when_editor_on_but_bridge_off(st: storemod.Store, tmp
     with pytest.raises(uediff.DiffBlocked) as ei:
         uediff.open_diff(st, "Foo/A.uasset", a, b,
                          launcher=lambda cmd: pytest.fail("프로세스를 띄우면 안 된다"),
-                         bridge=br, editor_running=lambda: True)
+                         bridge=br, editor_running=lambda *a, **k: True)
     assert "브릿지" in str(ei.value) and br.calls == []
 
 
@@ -268,16 +268,16 @@ def test_open_diff_process_when_editor_off(st: storemod.Store, tmp_path: Path) -
     a, b = shas(st)
     br = FakeBridge(alive=False)
     r = uediff.open_diff(st, "Foo/A.uasset", a, b, launcher=lambda cmd: 5, bridge=br,
-                         editor_running=lambda: False)
+                         editor_running=lambda *a, **k: False)
     assert r["mode"] == "process" and r["pid"] == 5 and br.calls == [] and r["note"]
 
 
 def test_plan_diff(st: storemod.Store) -> None:
-    on = uediff.plan_diff(st, bridge=FakeBridge(), editor_running=lambda: True)
+    on = uediff.plan_diff(st, bridge=FakeBridge(), editor_running=lambda *a, **k: True)
     assert on["mode"] == "editor" and on["bridge"] is True and on["hint"] == ""
-    off_bridge = uediff.plan_diff(st, bridge=FakeBridge(alive=False), editor_running=lambda: True)
+    off_bridge = uediff.plan_diff(st, bridge=FakeBridge(alive=False), editor_running=lambda *a, **k: True)
     assert off_bridge["mode"] == "editor" and off_bridge["bridge"] is False and "브릿지" in off_bridge["hint"]
-    off = uediff.plan_diff(st, bridge=FakeBridge(), editor_running=lambda: False)
+    off = uediff.plan_diff(st, bridge=FakeBridge(), editor_running=lambda *a, **k: False)
     assert off["mode"] == "process" and off["editor_running"] is False and "1분" in off["hint"]
 
 

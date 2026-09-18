@@ -329,7 +329,7 @@ def cmd_bridge_status(a: argparse.Namespace) -> int:
     from . import store as storemod
     cfg = cfgmod.load(a.project)
     age = bridge.heartbeat_age(cfg)
-    editor = "실행 중" if storemod.editor_running() else "꺼짐"
+    editor = "실행 중" if storemod.editor_running(cfg) else "꺼짐"
     if age is None:
         print(f"브릿지 없음 (heartbeat 없음)  에디터: {editor}")
         return 1

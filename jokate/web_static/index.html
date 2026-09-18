@@ -130,6 +130,10 @@
   .snap.noise.sel { opacity:.9; }
   .hidden-noise { margin:4px 14px 4px 40px; padding:5px 10px; font-size:11px; color:var(--dim); border:1px dashed var(--line2); border-radius:8px; cursor:pointer; }
   .hidden-noise:hover { color:var(--fg2); border-color:var(--dim2); }
+  #hideAuto { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
+  #hideAuto input { accent-color:var(--acc); }
+  .snap.flash { box-shadow:inset 0 0 0 2px var(--acc); border-radius:8px; animation:snapin .5s ease-out; }
+  @keyframes snapin { from { transform:translateY(-4px); } to { transform:none; } }
   .snap .hits { font-size:11px; color:var(--acc2); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
   /* ---------- 검색 ---------- */
@@ -324,12 +328,12 @@
 <main id="main">
   <div id="left">
     <div id="changes" class="card" data-list="changes">
-      <div class="ph"><b>현재 변경사항</b><span class="selcount"></span><span class="spacer"></span><button id="reloadStatus" class="ghost small">새로고침</button><button class="fold" data-fold="changes" title="접기/펼치기">▾</button></div>
+      <div class="ph"><b>현재 변경사항</b><span class="hint" id="baseRef">기준 확인 중…</span><span class="selcount"></span><span class="spacer"></span><button id="reloadStatus" class="ghost small">새로고침</button><button class="fold" data-fold="changes" title="접기/펼치기">▾</button></div>
       <div id="changesBody"><p class="dim" style="padding:12px 14px">불러오는 중…</p></div>
     </div>
     <div id="hsplit" class="splitter row" tabindex="0" role="separator" aria-orientation="horizontal" aria-label="변경사항/타임라인 경계선"></div>
     <div id="tlcard" class="card">
-      <div class="ph"><b>타임라인</b><input id="q" placeholder="애셋·클래스·메시지 검색  /" maxlength="80"><button id="qclear" class="ghost small" style="display:none" title="검색 해제 (Esc)">✕</button><span class="hint" id="qinfo">라벨 = 밝은 점 · 자동 = 흐린 점</span><button class="fold" data-fold="tlcard" title="접기/펼치기">▾</button></div>
+      <div class="ph"><b>타임라인</b><input id="q" placeholder="애셋·클래스·메시지 검색  /" maxlength="80"><button id="qclear" class="ghost small" style="display:none" title="검색 해제 (Esc)">✕</button><span class="hint" id="qinfo">라벨 = 밝은 점 · 자동 = 흐린 점</span><label class="hint" id="hideAuto" title="자동 저장 스냅샷을 숨깁니다"><input type="checkbox" id="hideAutoCb"> 자동 저장 숨기기</label><button class="fold" data-fold="tlcard" title="접기/펼치기">▾</button></div>
       <div id="timeline"></div>
     </div>
   </div>
@@ -362,6 +366,9 @@ let tlSel = new Set(), tlAnchor = null;      // 타임라인 다중 선택 (Ctrl
 let searchHits = null, searchTimer = null;   // searchHits: Map<snapshot id, {matched, by}> · null = 검색 안 함
 const NOISE_KEY = 'jokate.showNoise';
 let showNoise = localStorage.getItem(NOISE_KEY) === '1';
+const HIDE_AUTO_KEY = 'jokate.hideAuto';
+let hideAuto = localStorage.getItem(HIDE_AUTO_KEY) === '1';
+const countOf = c => Object.values(c || {}).reduce((a, b) => a + b, 0);
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -442,9 +449,7 @@ function badges(bc) {
 const clsBadge = cls => `<span class="badge" style="--h:${hue(cls)}">${esc(cls)}</span>`;
 
 // ---- 통계 ----
-async function loadInfo() {
-  try {
-    const i = await api('/api/info');
+function applyInfo(i) {
     $('#proj').textContent = i.project;
     if (buildId === null) buildId = i.build;
     if (i.stale) showStale();
@@ -452,8 +457,12 @@ async function loadInfo() {
     $('#stAssets').innerHTML = `${i.assets}<small>authored</small>`;
     $('#stStore').innerHTML = `${fmtB(i.store_bytes)}<small>${i.objects}개</small>`;
     $('#stLast').innerHTML = i.last ? `<span style="font-size:15px">${esc(i.last.time.slice(5, 16))}</span><small>#${i.last.id}</small>` : '없음';
+    $('#baseRef').textContent = i.last_label ? `마지막으로 올린 #${i.last_label.id} 이후` : '아직 올린 적 없음';
     if (typeof applyFold === 'function') applyFold();   // 접힌 상태면 한 줄 요약 갱신
-  } catch (e) { /* 통계는 실패해도 UI 는 동작 */ }
+}
+async function loadInfo() {
+  try { applyInfo(await api('/api/info')); }
+  catch (e) { /* 통계는 실패해도 UI 는 동작 */ }
 }
 
 // ---- 다중 선택 ----
@@ -534,7 +543,7 @@ function menuFor(name) {
     {ic:'⬆', label: `선택한 것만 올리기 (${n})`, disabled: !n, run: () => snapFlow(rels)},
     {ic:'⏫', label: '전부 올리기', run: () => snapFlow([])},
     '-',
-    {ic:'↩', label: `선택한 것 되돌리기 — 마지막 스냅샷 #${headId ?? '-'} 상태로 (${n})`, disabled: !n || headId == null, run: () => restoreFlow(headId, rels)},
+    {ic:'↩', label: `선택한 것을 마지막으로 올린 상태로 되돌리기 (${n})`, disabled: !n, run: () => restoreFlow('base', rels)},
   ];
   return [
     {ic:'↩', label: `선택한 애셋을 이 시점(#${selected})으로 되돌리기 (${n})`, disabled: !n || selected == null, run: () => restoreFlow(selected, rels)},
@@ -611,13 +620,14 @@ function renderTimeline() {
   for (const s of lastLog) {
     const hit = searchHits ? searchHits.get(s.id) : null;
     if (searchHits && !hit) continue;
+    if (!searchHits && hideAuto && s.kind === 'auto' && s.id !== selected) continue;
     if (!searchHits && s.all_noise && !showNoise && s.id !== selected) { hidden.push(s.id); continue; }
     flush();
     const div = document.createElement('div');
     div.className = `snap ${s.kind}` + (s.all_noise ? ' noise' : '') + (s.id === selected ? ' sel' : '')
       + (tlSel.has(s.id) ? ' msel' : '');
     div.dataset.id = s.id;
-    div.innerHTML = `<div class="msg"><span class="id">#${s.id}</span>${esc(s.message || (s.kind === 'auto' ? '자동 저장' : ''))}${s.all_noise ? ' <span class="badge noise">리세이브만</span>' : ''}</div>
+    div.innerHTML = `<div class="msg"><span class="id">#${s.id}</span>${esc(s.message || (s.kind === 'auto' ? '자동 저장' : ''))}${s.all_noise ? ' <span class="badge noise">리세이브만</span>' : ''}${s.uploaded ? ` <span class="badge" style="--h:150">올림 ${countOf(s.counts)}개</span>` : ''}</div>
       <div class="meta">${esc(s.time)} · ${s.total}개 추적</div>
       <div class="counts">${pills(s.counts)}</div><div>${badges(s.by_class)}</div>` + hitsHtml(hit);
     div.onclick = e => snapClick(s.id, e);
@@ -995,20 +1005,23 @@ async function snapFlow(only) {
 function refList(title, xs) {
   return `<div class="err"><b>경고: ${esc(title)} (${xs.length})</b><br>` + xs.map(x => `! ${esc(x.rel)} → ${esc(x.dep)}`).join('<br>') + '</div>';
 }
+// id === 'base' 면 baseline(마지막으로 올린 상태) 되돌리기 — /api/revert
+const rUrl = id => id === 'base' ? '/api/revert' : '/api/restore/' + id;
+const rTitle = id => id === 'base' ? '마지막으로 올린 상태로 되돌리기' : `#${id} 로 되돌리기`;
 async function restoreFlow(id, assets) {
   const scope = assets.length ? `선택 ${assets.length}개` : '전체';
-  openModal(`<h3>#${id} 로 되돌리기 (${esc(scope)})</h3><p class="dim">계산 중…</p>`);
+  openModal(`<h3>${esc(rTitle(id))} (${esc(scope)})</h3><p class="dim">계산 중…</p>`);
   let p;
   try {
     const qs = assets.map(a => 'asset=' + encodeURIComponent(a)).join('&');
-    p = await api(`/api/restore/${id}` + (qs ? '?' + qs : ''));
+    p = await api(rUrl(id) + (qs ? '?' + qs : ''));
   } catch (e) {
-    openModal(`<h3>#${id} 로 되돌리기</h3><div class="err">${esc(e.message)}</div><div class="btns"><button class="ghost" onclick="closeModal()">닫기</button></div>`);
+    openModal(`<h3>${esc(rTitle(id))}</h3><div class="err">${esc(e.message)}</div><div class="btns"><button class="ghost" onclick="closeModal()">닫기</button></div>`);
     return;
   }
   const n = rows(p.diff).length;
-  let html = `<h3>#${id} ${esc(p.snapshot.message || '자동 저장')} 로 되돌리기 <span class="dim" style="font-weight:500">(${esc(scope)})</span></h3>
-    <div class="dim">${esc(p.snapshot.time)} · 현재 → #${id}</div><div class="bar" style="margin:8px 0">${pills(p.diff.counts)}</div>` + diffTable(p.diff, null);
+  let html = `<h3>${esc(id === 'base' ? rTitle(id) : `#${id} ${p.snapshot.message || '자동 저장'} 로 되돌리기`)} <span class="dim" style="font-weight:500">(${esc(scope)})</span></h3>
+    <div class="dim">${esc(p.snapshot.time)} · 현재 → ${esc(id === 'base' ? '올린 상태' : '#' + id)}</div><div class="bar" style="margin:8px 0">${pills(p.diff.counts)}</div>` + diffTable(p.diff, null);
   if (p.dependents.length) html += refList('롤백으로 사라지는 애셋을 참조', p.dependents);
   if (p.broken.length) html += refList('깨질 참조', p.broken);
   if (n && !p.dependents.length && !p.broken.length) html += '<p class="ok">✓ 참조 검산: 이상 없음</p>';
@@ -1022,7 +1035,7 @@ async function applyRestore(id, assets, discard) {
   const btn = $('#rok'), box = $('#restoreErr');
   btn.disabled = true; btn.textContent = '적용 중…'; box.innerHTML = '';
   try {
-    const r = await api('/api/restore/' + id, {method: 'POST', headers: JSONH, body: JSON.stringify({assets, discard_dirty: discard})});
+    const r = await api(rUrl(id), {method: 'POST', headers: JSONH, body: JSON.stringify({assets, discard_dirty: discard})});
     closeModal();
     const safetyTag = (r.safety_created === false) ? '되돌리기 전 상태' : '안전 스냅샷';
     toast(`롤백 완료 #${r.result.id} · ${safetyTag} #${r.safety.id} · 복사 ${r.written} · 삭제 ${r.deleted}`,
@@ -1272,6 +1285,44 @@ $('#dstop').onclick = async () => {
   document.body.appendChild(d);
 };
 setInterval(loadDaemon, 10000);
+
+// ---- 자동 저장 숨기기 ----
+$('#hideAutoCb').checked = hideAuto;
+$('#hideAutoCb').onchange = e => {
+  hideAuto = e.target.checked;
+  localStorage.setItem(HIDE_AUTO_KEY, hideAuto ? '1' : '0');
+  renderTimeline();
+};
+
+// ---- 자동 갱신 (5초 폴링 · 탭이 숨겨지면 쉬다) ----
+let pollSeen = null;
+function flashTop() {
+  const first = document.querySelector('#timeline .snap');
+  if (!first) return;
+  first.classList.add('flash');
+  setTimeout(() => first.classList.remove('flash'), 1600);
+}
+async function pollTick() {
+  if (document.hidden) return;
+  let i;
+  try { i = await api('/api/info'); } catch (e) { return; }
+  applyInfo(i);
+  const lastId = i.last ? i.last.id : null;
+  if (pollSeen) {
+    if (i.snapshots !== pollSeen.snapshots || lastId !== pollSeen.lastId) {
+      const tl = $('#timeline'), top = tl.scrollTop;   // 선택·검색어·다중선택은 전역 상태라 유지된다
+      lastLog = await api('/api/log');
+      headId = lastLog.length ? Math.max(...lastLog.map(s => s.id)) : null;
+      renderTimeline();
+      tl.scrollTop = top;
+      if (lastId !== pollSeen.lastId) flashTop();
+    }
+    if (i.pending !== pollSeen.pending) await loadStatus();
+  }
+  pollSeen = {snapshots: i.snapshots, lastId, pending: i.pending};
+}
+setInterval(pollTick, 5000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) pollTick(); });
 
 // ---- URL 쿼리 (에디터 메뉴에서 열림) ----
 async function openFromQuery() {

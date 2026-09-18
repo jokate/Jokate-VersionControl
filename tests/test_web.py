@@ -184,7 +184,7 @@ def test_api_status_and_snap_only(st: storemod.Store) -> None:
 
 
 def test_api_restore_apply(st: storemod.Store, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(storemod, "editor_running", lambda: False)
+    monkeypatch.setattr(storemod, "editor_running", lambda *a, **k: False)
     r = web.api_restore_apply(st, 1, ["Foo/A.uasset"], False)
     assert r["ok"] is True and r["safety"]["id"] == 2 and r["result"]["id"] == 3
     assert r["safety_created"] is False   # 되돌릴 애셋에 올리지 않은 변경이 없었다
@@ -197,7 +197,7 @@ def test_api_restore_apply(st: storemod.Store, monkeypatch: pytest.MonkeyPatch) 
 
 def test_api_restore_apply_blocked(st: storemod.Store, monkeypatch: pytest.MonkeyPatch) -> None:
     from jokate import bridge
-    monkeypatch.setattr(storemod, "editor_running", lambda: True)
+    monkeypatch.setattr(storemod, "editor_running", lambda *a, **k: True)
     monkeypatch.setattr(bridge, "bridge_alive", lambda cfg, *a, **k: True)
     monkeypatch.setattr(bridge, "request", lambda cfg, op, pkgs, args=None, **k: {"ok": True, "dirty": list(pkgs)})
     with pytest.raises(storemod.RestoreBlocked) as ei:
@@ -212,7 +212,7 @@ def test_api_restore_apply_blocked(st: storemod.Store, monkeypatch: pytest.Monke
         web.api_restore_apply(st, 1)
     assert web.error_response(ei2.value)[0] == 409 and ei2.value.dirty == []
     # 파일 잠김 → 409 본문에 locked
-    monkeypatch.setattr(storemod, "editor_running", lambda: False)
+    monkeypatch.setattr(storemod, "editor_running", lambda *a, **k: False)
     monkeypatch.setattr(storemod, "file_locked", lambda p: p.name == "A.uasset")
     with pytest.raises(storemod.RestoreBlocked) as ei3:
         web.api_restore_apply(st, 1, ["Foo/A.uasset"], False)

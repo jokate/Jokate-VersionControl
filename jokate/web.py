@@ -12,7 +12,9 @@ JSON API
   GET  /api/search?q=<q>             애셋·클래스·메시지 부분일치(대소문자 무시) 스냅샷 검색
   GET  /api/metadiff?a=<sha>&b=<sha> 의미 diff (DataTable 수치 변경) {available, missing, kind, diff}
   GET  /api/restore/<id>?asset=<rel> plan_restore 드라이런 (diff + broken + dependents). 적용 없음
-  GET  /api/status                   HEAD 대비 아직 올리지 않은 변경 {diff}
+  GET  /api/status                   baseline(마지막으로 올린 상태) 대비 올리지 않은 변경 {diff}
+  GET  /api/revert?asset=<rel>       baseline 으로 되돌리기 드라이런 (적용 없음)
+  POST /api/revert {assets?, discard_dirty?}  baseline 으로 되돌리기 적용 (409 규칙은 restore 와 동일)
   GET  /api/daemon                   {running, paused, pid, port, started, last_line}
   POST /api/daemon {action}          pause|resume|stop|restart (데몬 모드가 아니면 409)
   GET  /api/info                     요약 + build/build_disk/stale (낡은 서버 감지)
@@ -112,7 +114,7 @@ def _diff(d: Diff) -> dict:
 
 # ---- API 로직 (서버 독립) ----
 def api_info(store: Store) -> dict:
-    """상단 요약: 프로젝트명, 스냅샷 수, HEAD 추적 애셋 수, 객체 수·용량, 마지막 스냅샷."""
+    """상단 요약 + pending(올리지 않은 변경 수)·last_label(마지막으로 올린 스냅샷)."""
     head = store.head()
     n_snaps = store.db.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
     n_assets = store.db.execute("SELECT COUNT(*) FROM tree WHERE snapshot_id=?", (head.id,)).fetchone()[0] if head else 0
@@ -124,8 +126,13 @@ def api_info(store: Store) -> dict:
                 objects += 1
                 size += p.stat().st_size
     disk = current_build()
+    pending = sum(_counts(store.status()).values())
+    row = store.db.execute(
+        "SELECT id FROM snapshots WHERE kind='label' ORDER BY id DESC LIMIT 1").fetchone()
+    last_label = _snapshot(store.get(row[0])) if row else None
     return {"project": store.cfg.root.name, "snapshots": n_snaps, "assets": n_assets,
             "objects": objects, "store_bytes": size, "last": _snapshot(head) if head else None,
+            "pending": pending, "last_label": last_label,
             "build": BUILD_ID, "build_disk": disk, "stale": disk != BUILD_ID}
 
 
@@ -136,8 +143,10 @@ def api_log(store: Store) -> list[dict]:
         for sid in (s.id, s.parent):
             if sid not in trees:
                 trees[sid] = store.tree(sid)
-        d = diff_trees(trees[s.parent], trees[s.id])
+        up = store.uploaded_diff(s.id)     # 사용자가 올린 스냅샷은 '이번에 올린 것' 기준
+        d = up if up is not None else diff_trees(trees[s.parent], trees[s.id])
         item = _snapshot(s)
+        item["uploaded"] = up is not None
         item["total"] = len(trees[s.id])
         item["counts"] = _counts(d)
         item["by_class"] = {cls: dict(c) for cls, c in sorted(d.by_class().items())}
@@ -187,8 +196,9 @@ def api_search(store: Store, q: str, limit: int = 200) -> dict:
 
 
 def api_snap(store: Store, sid: int) -> dict:
-    s, d = store.show(sid)  # KeyError → 404
-    return {"snapshot": _snapshot(s), "diff": _diff(d)}
+    s, d = store.show(sid)  # KeyError → 404 (올린 스냅샷이면 '이번에 올린 것')
+    return {"snapshot": _snapshot(s), "diff": _diff(d),
+            "uploaded": store.uploaded_diff(sid) is not None}
 
 
 def api_asset(store: Store, rel: str) -> dict:
@@ -263,6 +273,25 @@ def api_restore_apply(store: Store, sid: int, assets: list[str] | None = None,
                       discard_dirty: bool = False) -> dict:
     """plan_restore → apply_restore. RestoreBlocked(→409)/KeyError(→404) 는 호출자가 처리."""
     plan = store.plan_restore(sid, assets or None)
+    r = store.apply_restore(plan, discard_dirty=discard_dirty)
+    return {"ok": True, "safety": _snapshot(r.safety), "result": _snapshot(r.result),
+            "written": r.written, "deleted": r.deleted, "reloaded": r.reloaded,
+            "safety_created": r.safety_created}
+
+
+def api_revert(store: Store, assets: list[str] | None = None) -> dict:
+    """baseline(마지막으로 올린 상태)으로 되돌릴 계획(드라이런). /api/restore 와 같은 형태."""
+    plan = store.plan_revert_to_baseline(assets or None)
+    return {"snapshot": _snapshot(plan.snapshot), "assets": assets or [],
+            "diff": _diff(plan.diff),
+            "broken": [{"rel": r, "dep": d} for r, d in plan.broken],
+            "dependents": [{"rel": r, "dep": d} for r, d in plan.dependents]}
+
+
+def api_revert_apply(store: Store, assets: list[str] | None = None,
+                     discard_dirty: bool = False) -> dict:
+    """baseline 으로 되돌리기 적용. RestoreBlocked(→409) 규칙은 /api/restore 와 동일."""
+    plan = store.plan_revert_to_baseline(assets or None)
     r = store.apply_restore(plan, discard_dirty=discard_dirty)
     return {"ok": True, "safety": _snapshot(r.safety), "result": _snapshot(r.result),
             "written": r.written, "deleted": r.deleted, "reloaded": r.reloaded,
@@ -482,6 +511,9 @@ def make_handler(cfg: Config, control=None):
                     if r is None:
                         raise NotFound("썸네일 없음")
                     self._send(200, r[1], r[0])
+                elif path == "/api/revert":
+                    assets = q.get("asset", [])
+                    self._json(self._run(lambda st: api_revert(st, assets)))
                 elif path == "/api/uediff/plan":
                     self._json(self._run(api_uediff_plan))
                 elif path.startswith("/api/restore/"):
@@ -510,6 +542,12 @@ def make_handler(cfg: Config, control=None):
                     if not isinstance(only, list):
                         raise ValueError("only 는 rel 목록")
                     self._json(self._run(lambda st: api_snap_create(st, message, only)))
+                elif u.path == "/api/revert":
+                    assets = body.get("assets") or []
+                    if not isinstance(assets, list):
+                        raise ValueError("assets 는 rel 목록")
+                    discard = bool(body.get("discard_dirty", False))
+                    self._json(self._run(lambda st: api_revert_apply(st, [str(x) for x in assets], discard)))
                 elif u.path == "/api/squash":
                     ids = body.get("ids") or []
                     if not isinstance(ids, list):

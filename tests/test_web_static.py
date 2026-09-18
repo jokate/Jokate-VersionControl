@@ -32,7 +32,16 @@ REQUIRED_IDS = [
     "optRowThumb",  # 행 썸네일 표시 체크박스
     "statsWrap",
     "statsMini",
+    "baseRef",      # '마지막으로 올린 #N 이후' 기준 표시
+    "hideAutoCb",   # 자동 저장 숨기기 토글
 ]
+
+
+def test_revert_and_polling_present(html: str) -> None:
+    assert "'/api/revert'" in html, "우클릭 되돌리기가 /api/revert 를 쓰지 않습니다"
+    assert "jokate.hideAuto" in html, "자동 저장 숨기기 localStorage 키가 없습니다"
+    assert "pollTick" in html and "document.hidden" in html, "5초 폴링/탭 숨김 처리가 없습니다"
+    assert "s.uploaded" in html, "타임라인의 '올림' 표시가 없습니다"
 
 
 @pytest.mark.parametrize("el_id", REQUIRED_IDS)

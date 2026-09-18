@@ -256,7 +256,7 @@ def test_cli_status_and_snap_only(project: Path, capsys: pytest.CaptureFixture) 
 
 def _two(project: Path, monkeypatch: pytest.MonkeyPatch | None = None) -> storemod.Store:
     if monkeypatch is not None:
-        monkeypatch.setattr(storemod, "editor_running", lambda: False)
+        monkeypatch.setattr(storemod, "editor_running", lambda *a, **k: False)
     st = storemod.Store(cfgmod.load(project))
     st.snap("first", kind="label")
     (project / "Content" / "Foo" / "A.uasset").write_bytes(b"AAAA-v2")

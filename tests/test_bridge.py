@@ -101,7 +101,7 @@ def _two_snapshots(project: Path) -> storemod.Store:
 
 
 def test_apply_restore_no_bridge(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(storemod, "editor_running", lambda: True)
+    monkeypatch.setattr(storemod, "editor_running", lambda *a, **k: True)
     st = _two_snapshots(project)
     with pytest.raises(RuntimeError, match="브릿지"):
         st.apply_restore(st.plan_restore(1))
@@ -109,7 +109,7 @@ def test_apply_restore_no_bridge(project: Path, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_apply_restore_dirty_blocks(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(storemod, "editor_running", lambda: True)
+    monkeypatch.setattr(storemod, "editor_running", lambda *a, **k: True)
     st = _two_snapshots(project)
 
     def handler(op, pkgs, args):
@@ -133,7 +133,7 @@ def test_apply_restore_dirty_blocks(project: Path, monkeypatch: pytest.MonkeyPat
 
 def test_apply_restore_release_order(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """dirty → release → (쓰기) → reload 순서. release 는 쓰기 전에 와야 한다."""
-    monkeypatch.setattr(storemod, "editor_running", lambda: True)
+    monkeypatch.setattr(storemod, "editor_running", lambda *a, **k: True)
     st = _two_snapshots(project)
     seen: list[str] = []
     asset = project / "Content" / "Foo" / "A.uasset"
@@ -156,7 +156,7 @@ def test_apply_restore_release_order(project: Path, monkeypatch: pytest.MonkeyPa
 
 def test_apply_restore_release_failure_ignored(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """release 가 실패를 돌려줘도 사전 잠금 검사가 통과하면 그대로 진행한다."""
-    monkeypatch.setattr(storemod, "editor_running", lambda: True)
+    monkeypatch.setattr(storemod, "editor_running", lambda *a, **k: True)
     st = _two_snapshots(project)
 
     def handler(op, pkgs, args):
@@ -173,7 +173,7 @@ def test_apply_restore_release_failure_ignored(project: Path, monkeypatch: pytes
 
 
 def test_apply_restore_reload_fail(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(storemod, "editor_running", lambda: True)
+    monkeypatch.setattr(storemod, "editor_running", lambda *a, **k: True)
     st = _two_snapshots(project)
     handler = lambda op, p, a: {"ok": True, "dirty": []} if op == "dirty" else {"ok": False, "error": "boom"}  # noqa: E731
     with FakeEditor(st.cfg, handler):

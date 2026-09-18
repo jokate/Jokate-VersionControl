@@ -423,7 +423,7 @@ class Store:
         (discard_dirty=True 면 통과). 파일 적용 후 에디터에 reload 요청.
         """
         use_bridge = False
-        if check_editor and editor_running():
+        if check_editor and editor_running(self.cfg):
             from . import bridge
             if not bridge.bridge_alive(self.cfg):
                 raise RestoreBlocked("에디터가 켜져 있는데 브릿지가 없다 — 에디터 Python 콘솔에서 "
@@ -894,16 +894,58 @@ def _pkg_of(rel: str) -> str:
     return "/Game/" + rel.rsplit(".", 1)[0]
 
 
-def editor_running() -> bool:
-    """tasklist 에 UnrealEditor.exe 가 있으면 True. Windows 가 아니면 False."""
-    if sys.platform != "win32":
-        return False
+def _tasklist_has_editor() -> bool:
+    """tasklist 에 UnrealEditor.exe 가 하나라도 있으면 True (프로젝트 구분 없음)."""
     try:
         out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq UnrealEditor.exe", "/NH"],
                              capture_output=True, text=True, timeout=15).stdout
     except Exception:
         return False
     return "unrealeditor.exe" in out.lower()
+
+
+def query_editor_cmdlines(timeout: float = 10.0) -> list[str] | None:
+    """실행 중인 UnrealEditor.exe 들의 명령줄 목록. 조회 실패면 None(판정 불가)."""
+    cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+           "Get-CimInstance Win32_Process -Filter \"Name='UnrealEditor.exe'\" "
+           "| ForEach-Object { $_.CommandLine }"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    return [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()]
+
+
+def _norm_path(p) -> str:
+    return str(p).replace("\\", "/").rstrip("/").lower()
+
+
+def editor_running(cfg: Config | None = None, *, query=None) -> bool:
+    """UnrealEditor.exe 가 떠 있는지. Windows 가 아니면 False.
+
+    cfg 를 주면 '이 프로젝트의' 에디터만 센다 — 프로세스 명령줄에 이 프로젝트의 .uproject 나
+    프로젝트 폴더 경로가 들어 있는 것만(대소문자·슬래시 방향 무시). 명령줄 조회가 실패하면
+    보수적으로 기존 tasklist 방식으로 폴백한다.
+    """
+    if sys.platform != "win32":
+        return False
+    if cfg is None:
+        return _tasklist_has_editor()
+    lines = (query or query_editor_cmdlines)()
+    if lines is None:                      # 조회 불가 → 보수적으로 (다른 프로젝트여도 참)
+        return _tasklist_has_editor()
+    root = _norm_path(cfg.root)
+    names = {_norm_path(p) for p in Path(cfg.root).glob("*.uproject")}
+    names.add(_norm_path(Path(cfg.root) / (Path(cfg.root).name + ".uproject")))
+    for ln in lines:
+        s = _norm_path(ln)
+        if any(n and n in s for n in names):
+            return True
+        if root and root in s:
+            return True
+    return False
 
 
 def format_restore(plan: RestorePlan) -> str:

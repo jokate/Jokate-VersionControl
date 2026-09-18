@@ -127,6 +127,18 @@ def restore_assets(base, sid, rels, discard_dirty=False):
     return _call(base, "/api/restore/%d" % int(sid), {"assets": list(rels), "discard_dirty": bool(discard_dirty)})
 
 
+def revert_assets(base, rels, discard_dirty=False):
+    """POST /api/revert → (code, json). 마지막으로 올린 상태로 되돌린다."""
+    return _call(base, "/api/revert", {"assets": list(rels), "discard_dirty": bool(discard_dirty)})
+
+
+def revert_preview(base, rels):
+    """드라이런: GET /api/revert?asset=<rel>&asset=... → (code, json). 적용하지 않는다."""
+    from urllib.parse import urlencode
+    q = urlencode([("asset", r) for r in rels])
+    return _call(base, "/api/revert" + (("?" + q) if q else ""))
+
+
 def restore_preview(base, sid, rels):
     """드라이런: GET /api/restore/<sid>?asset=<rel>&asset=... → (status_code, json). 적용하지 않는다."""
     from urllib.parse import urlencode
@@ -164,11 +176,13 @@ def _warnings(preview):
     return out
 
 
-def format_preview(preview, sid, max_rows=12):
-    """되돌리기 확인 창 본문."""
+def format_preview(preview, sid=None, max_rows=12):
+    """되돌리기 확인 창 본문. sid 가 없고 스냅샷 id 도 0 이면 baseline(마지막으로 올린 상태)."""
     snap = (preview or {}).get("snapshot") or {}
     msg = snap.get("message") or "(메시지 없음)"
-    lines = ["#%s %s 상태로 되돌립니다" % (snap.get("id", sid), msg)]
+    target = snap.get("id") or sid
+    lines = ["#%s %s 상태로 되돌립니다" % (target, msg) if target
+             else "마지막으로 올린 상태로 되돌립니다"]
     counts = ((preview or {}).get("diff") or {}).get("counts") or {}
     parts = []
     for key, label in (("modified", "수정"), ("added", "부활"), ("moved", "이동"), ("deleted", "삭제")):
