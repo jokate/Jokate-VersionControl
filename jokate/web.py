@@ -10,6 +10,8 @@ JSON API
   GET  /api/thumb?sha=<sha>          store 객체의 첫 썸네일 (image/jpeg|png, 없으면 404, 메모리 캐시)
   GET  /api/restore/<id>?asset=<rel> plan_restore 드라이런 (diff + broken + dependents). 적용 없음
   GET  /api/status                   HEAD 대비 아직 올리지 않은 변경 {diff}
+  GET  /api/daemon                   {running, paused, pid, port, started, last_line}
+  POST /api/daemon {action}          pause|resume|stop (데몬 모드가 아니면 409)
   POST /api/snap  {message, only?:[rel]}   label 스냅샷 (only 있으면 부분 스냅샷)
   POST /api/restore/<id> {assets?:[rel], discard_dirty?:bool}  롤백 적용. 중단(dirty·브릿지) → 409 {ok:false,error,dirty}
   GET  /                             web_static/index.html
@@ -150,8 +152,35 @@ def api_restore_apply(store: Store, sid: int, assets: list[str] | None = None,
             "written": r.written, "deleted": r.deleted, "reloaded": r.reloaded}
 
 
+class DaemonUnavailable(Exception):
+    """serve 단독 모드라 데몬 조작이 불가."""
+
+
+def api_daemon_get(control=None) -> dict:
+    """데몬 상태. control 이 없으면(serve 단독) running=False."""
+    if control is None:
+        return {"running": False, "paused": False, "pid": None, "port": None,
+                "started": None, "last_line": None}
+    return control.status()
+
+
+def api_daemon_post(control, action: str) -> dict:
+    """action: pause | resume | stop. control 이 없으면 DaemonUnavailable(409)."""
+    if control is None:
+        raise DaemonUnavailable("데몬 모드가 아닙니다 (serve 단독)")
+    if action == "pause":
+        return control.pause()
+    if action == "resume":
+        return control.resume()
+    if action == "stop":
+        return control.stop()
+    raise ValueError(f"알 수 없는 action: {action}")
+
+
 def error_response(e: BaseException) -> tuple[int, dict]:
-    """예외 → (HTTP 코드, JSON 본문). RestoreBlocked 는 409 + dirty 목록."""
+    """예외 → (HTTP 코드, JSON 본문). RestoreBlocked·DaemonUnavailable 은 409."""
+    if isinstance(e, DaemonUnavailable):
+        return 409, {"ok": False, "error": str(e)}
     if isinstance(e, RestoreBlocked):
         return 409, {"ok": False, "error": str(e), "dirty": list(e.dirty)}
     if isinstance(e, (NotFound, KeyError)):
@@ -193,7 +222,8 @@ class NotFound(Exception):
     pass
 
 
-def make_handler(cfg: Config):
+def make_handler(cfg: Config, control=None):
+    """control 은 선택적 데몬 컨트롤 객체(daemon.DaemonControl). 없으면 serve 단독."""
     lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -232,6 +262,8 @@ def make_handler(cfg: Config):
                     self._json(self._run(api_info))
                 elif path == "/api/log":
                     self._json(self._run(api_log))
+                elif path == "/api/daemon":
+                    self._json(api_daemon_get(control))
                 elif path == "/api/status":
                     self._json(self._run(api_status))
                 elif path.startswith("/api/snap/"):
@@ -264,7 +296,9 @@ def make_handler(cfg: Config):
                 n = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(n) if n else b""
                 body = json.loads(raw.decode("utf-8") or "{}")
-                if u.path == "/api/snap":
+                if u.path == "/api/daemon":
+                    self._json(api_daemon_post(control, str(body.get("action", ""))))
+                elif u.path == "/api/snap":
                     message = str(body.get("message", "")).strip()
                     if not message:
                         raise ValueError("message 필요")

@@ -100,6 +100,12 @@
   .pill.moved { color:var(--r); background:rgba(180,140,255,.12); }
   .pill.deleted { color:var(--d); background:rgba(255,93,108,.12); }
   .pill.resave { color:var(--n); background:rgba(216,194,90,.12); }
+  .pill.on { color:var(--a); background:rgba(61,220,132,.14); }
+  .pill.paused { color:var(--m); background:rgba(255,181,71,.14); }
+  .pill.act { cursor:pointer; user-select:none; }
+  .pill.act:hover { filter:brightness(1.15); }
+  #dead { position:fixed; inset:0; z-index:200; display:grid; place-items:center; background:rgba(11,14,20,.92);
+          color:var(--fg2); font-size:18px; font-weight:600; text-align:center; }
   .badge { display:inline-block; font-size:11px; padding:0 8px; border-radius:999px; margin:2px 4px 0 0; font-weight:500;
            background:hsl(var(--h) 60% 22% / .7); color:hsl(var(--h) 90% 78%); border:1px solid hsl(var(--h) 50% 32% / .8); }
   .badge.noise { --h:50; }
@@ -208,6 +214,8 @@
   <button id="mksnap">스냅샷 만들기</button>
   <button id="reload" class="ghost">새로고침</button>
   <label id="showNoise"><input type="checkbox" id="showNoiseCb"> 리세이브 스냅샷 보기</label>
+  <span class="pill" id="dchip">…</span>
+  <button id="dstop" class="ghost small" style="display:none">종료</button>
   <span id="status"></span>
 </header>
 <div id="stats">
@@ -615,6 +623,47 @@ $('#reload').onclick = () => { loadLog(); loadStatus(); };
 $('#reloadStatus').onclick = loadStatus;
 setInterval(loadStatus, 30000);
 
+// ---- 데몬 상태 칩 ----
+let daemon = null;
+function paintDaemon() {
+  const c = $('#dchip'), b = $('#dstop');
+  if (!daemon) { c.textContent = '상태 확인 불가'; c.className = 'pill'; b.style.display = 'none'; return; }
+  if (daemon.running) {
+    c.className = 'pill act ' + (daemon.paused ? 'paused' : 'on');
+    c.textContent = daemon.paused ? '일시정지' : '● 자동 스냅샷 켜짐';
+    c.title = (daemon.paused ? '클릭하면 자동 스냅샷 재개' : '클릭하면 일시정지')
+      + (daemon.last_line ? '\n' + daemon.last_line : '');
+    b.style.display = '';
+  } else {
+    c.className = 'pill';
+    c.textContent = '자동 스냅샷 꺼짐 - serve 단독';
+    c.title = '자동 스냅샷 없이 웹 UI 만 실행 중';
+    b.style.display = 'none';
+  }
+}
+async function loadDaemon() {
+  try { daemon = await api('/api/daemon'); } catch (e) { daemon = null; }
+  paintDaemon();
+}
+$('#dchip').onclick = async () => {
+  if (!daemon || !daemon.running) return;
+  try {
+    daemon = await api('/api/daemon', {method: 'POST', headers: JSONH, body: JSON.stringify({action: daemon.paused ? 'resume' : 'pause'})});
+    paintDaemon();
+    toast(daemon.paused ? '자동 스냅샷 일시정지' : '자동 스냅샷 재개');
+  } catch (e) { toast('오류: ' + e.message, true); }
+};
+$('#dstop').onclick = async () => {
+  if (!confirm('자동 스냅샷과 웹 서버를 종료할까요?')) return;
+  try { await api('/api/daemon', {method: 'POST', headers: JSONH, body: JSON.stringify({action: 'stop'})}); }
+  catch (e) { toast('오류: ' + e.message, true); return; }
+  const d = document.createElement('div');
+  d.id = 'dead';
+  d.innerHTML = '<div>서버가 종료되었습니다<div style="font-size:13px;font-weight:400;margin-top:8px">다시 쓰려면 start.bat 을 실행하세요</div></div>';
+  document.body.appendChild(d);
+};
+setInterval(loadDaemon, 10000);
+
 // ---- URL 쿼리 (에디터 메뉴에서 열림) ----
 async function openFromQuery() {
   const q = new URLSearchParams(location.search);
@@ -628,7 +677,7 @@ async function openFromQuery() {
     $('#history').scrollIntoView({block: 'start'});
   } else if (asset) status('스냅샷이 없어 히스토리를 열 수 없음: ' + asset);
 }
-(async () => { await loadLog(); await loadStatus(); await openFromQuery(); })();
+(async () => { await loadLog(); await loadStatus(); await loadDaemon(); await openFromQuery(); })();
 </script>
 </body>
 </html>

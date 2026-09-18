@@ -201,6 +201,17 @@ def cmd_serve(a: argparse.Namespace) -> int:
     return webmod.serve(cfg, port=a.port if a.port is not None else cfg.port)
 
 
+def cmd_daemon(a: argparse.Namespace) -> int:
+    from . import daemon as daemonmod
+    cfg = cfgmod.load(a.project)
+    return daemonmod.run(cfg, port=a.port, interval=a.interval, debounce=a.debounce)
+
+
+def cmd_daemon_stop(a: argparse.Namespace) -> int:
+    from . import daemon as daemonmod
+    return daemonmod.stop_remote(cfgmod.load(a.project))
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="jokate")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -231,6 +242,13 @@ def main(argv: list[str] | None = None) -> int:
     s.set_defaults(fn=cmd_watch)
     s = sub.add_parser("serve"); s.add_argument("project")
     s.add_argument("--port", type=int, default=None, help="기본: config.toml [web] port (8765)"); s.set_defaults(fn=cmd_serve)
+    s = sub.add_parser("daemon", help="웹 UI + 자동 스냅샷을 한 프로세스로 (창 없음)"); s.add_argument("project")
+    s.add_argument("--port", type=int, default=None, help="기본: config.toml [web] port (8765)")
+    s.add_argument("--interval", type=float, default=2.0)
+    s.add_argument("--debounce", type=float, default=5.0)
+    s.set_defaults(fn=cmd_daemon)
+    s = sub.add_parser("daemon-stop", help="실행 중인 데몬 종료"); s.add_argument("project")
+    s.set_defaults(fn=cmd_daemon_stop)
 
     a = ap.parse_args(argv)
     return a.fn(a)

@@ -32,6 +32,8 @@ python -m jokate bridge-install <project>        # 에디터 브릿지 스크립
 python -m jokate bridge-status  <project>        # 브릿지 heartbeat 나이
 python -m jokate watch   <project> [--interval 2] [--debounce 5]      # 저장 감지 자동 스냅샷 데몬 (Ctrl+C 종료)
 python -m jokate serve   <project> [--port 8765]                      # 타임라인 웹 UI (http://127.0.0.1:8765/)
+python -m jokate daemon  <project> [--port 8765]                      # 한 프로세스로 웹 UI + 자동 스냅샷 (start.bat 이 pythonw 로 창 없이 띄움)
+python -m jokate daemon-stop <project>                                # 돌고 있는 데몬 종료 (.jokate/daemon.json 의 포트로 요청)
 ```
 
 ## 배치 파일 (더블클릭)
@@ -40,7 +42,8 @@ python -m jokate serve   <project> [--port 8765]                      # 타임�
 
 | 파일 | 하는 일 |
 |---|---|
-| `start.bat` | 자동 스냅샷(`watch`, 최소화 창) + 타임라인 웹 UI(`serve`) + 브라우저 열기. 이미 떠 있으면 브라우저만. Ctrl+C 로 끄면 watch 창도 닫힘. `JOKATE_NO_WATCH=1` / `JOKATE_NO_BROWSER=1` |
+| `start.bat` | 창 없는 데몬 하나(`daemon` = 웹 UI + 자동 스냅샷)를 `pythonw` 로 띄우고 브라우저 열기. 이미 떠 있으면 브라우저만. bat 창은 바로 닫힘. `JOKATE_NO_BROWSER=1` |
+| `stop.bat` | 돌고 있는 데몬 종료 (`daemon-stop`). 웹 화면의 종료 버튼과 같은 일 |
 | `snap.bat` | 올리지 않은 변경을 보여주고 메시지를 받아 라벨 스냅샷 (비우면 취소) |
 | `bridge-install.bat` | 에디터 브릿지 + 콘텐츠 브라우저 Jokate 메뉴 설치 |
 | `change-project.bat` | 기억한 프로젝트를 지우고 다시 선택 |
@@ -84,6 +87,13 @@ python -m jokate serve   <project> [--port 8765]                      # 타임�
 - 변화 감지 후 `--debounce` 초 동안 추가 변화가 없으면 auto 스냅샷 (에디터의 연속 저장을 한 스냅샷으로 묶음)
 - 실제 변경 판단은 sha 비교. 리세이브로 mtime 만 바뀌면 `(내용 동일, 건너뜀)`
 - 시작 시 즉시 스냅샷 한 번. 스냅샷마다 한 줄(시간, #id, 클래스별 A/M/R/D 집계)을 stdout 과 `.jokate/watch.log` 에 기록
+
+## 데몬 (daemon)
+
+- 한 프로세스에서 웹 서버 스레드 + `poll_once` 감시 루프 스레드. 콘솔 창이 없다(`pythonw`) — 로그는 `.jokate/daemon.log`
+- 상태 파일 `.jokate/daemon.json` `{pid, port, started, tool_dir}` — 시작 시 쓰고 종료 시 지운다. pid 가 살아 있고 그 포트의 `/api/info` 가 응답하면 '이미 실행 중' 으로 보고 새로 띄우지 않는다
+- 웹 헤더의 상태 칩: `● 자동 스냅샷 켜짐` / `일시정지` 클릭 토글, 옆의 `종료` 버튼은 데몬을 끈다. `serve` 단독이면 회색 칩에 조작 불가(409)
+- API: `GET /api/daemon`, `POST /api/daemon {action: pause|resume|stop}`
 
 ## 롤백 (restore)
 
@@ -130,6 +140,7 @@ python -m jokate serve   <project> [--port 8765]                      # 타임�
 - `jokate/scan.py` — 등급 분류 + 애셋 레코드(클래스·부모·의존성·해시)
 - `jokate/store.py` — 스냅샷 저장소 (내용주소 객체 + SQLite 인덱스, 트리 diff)
 - `jokate/watch.py` — 저장 감지 자동 스냅샷 데몬 (폴링 + debounce, `poll_once` 순수 함수)
+- `jokate/daemon.py` — 창 없는 단일 데몬 (웹 + watch 스레드, 상태 파일·로그, pause/resume/stop 컨트롤)
 - `jokate/web.py` + `jokate/web_static/index.html` — 타임라인 웹 UI (JSON API 는 `api_*` 순수 함수, 서버 없이 테스트)
 - `jokate/bridge.py` — 에디터 브릿지 도구 쪽 (`bridge_alive`, `request`, `install`) / `jokate/ue/jokate_bridge.py` — 에디터 쪽 (UE Python, `import unreal`, 콘텐츠 브라우저 메뉴) / `jokate/ue/jokate_client.py` — 웹 API 클라이언트 (urllib 만)
 - `jokate/config.py` — 프로젝트 설정
