@@ -14,7 +14,20 @@
 
 릴레이는 **한 번에 하나만**. 같은 저장소에 두 개를 동시에 돌리면 결과가 서로 덮어쓴다. `run.bat` 은 커밋 안 된 변경이 있으면 실행을 거부한다.
 
-## 옵션
+## 대시보드에서 돌리기
+
+```
+1. relay-agent\start.bat                  대시보드 http://127.0.0.1:8020 (이미 떠 있으면 브라우저만 열림)
+2. relay\copy.bat 17-layout               프롬프트를 클립보드에 복사
+3. 대시보드 새 실행:  저장소 jokate · 릴레이 quick-fable · build 단계 모델 Opus · 목표에 Ctrl+V → 실행
+4. 끝나면 relay\verify.bat → 직접 눌러 보기 → git commit
+```
+
+- 실행 전에 저장소가 깨끗한지 확인(`git status`). 커밋 안 된 변경이 있으면 릴레이 결과와 섞인다.
+- 예산 도달·중단은 대시보드의 **승인 / 재개 / 취소 / 변경 적용·버리기·되돌리기** 버튼으로 처리한다(CLI 의 approve/resume/discard/rollback 과 같다).
+- 실행마다 진행·이벤트·토큰·패치·인계서(HANDOFF) 화면이 있다. 릴레이가 남긴 `☐ 확인:` 항목이 사람이 눌러 볼 목록이다.
+
+## CLI 로 돌리기 (옵션)
 
 ```
 relay\run.bat 19a-baseline-store -Model fable          모델 바꾸기 (opus | fable | sonnet)
