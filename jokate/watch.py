@@ -77,7 +77,11 @@ def format_line(r: PollResult, now: float | None = None) -> str:
     for cls in sorted(bc):
         c = bc[cls]
         parts.append(f"{cls} " + "/".join(f"{k[0].upper()}{c[k]}" for k in ("added", "modified", "moved", "deleted") if c[k]))
-    return f"{ts}  #{r.snapshot.id} {r.snapshot.kind}  " + ("; ".join(parts) or "(초기)")
+    line = f"{ts}  #{r.snapshot.id} {r.snapshot.kind}  " + ("; ".join(p for p in parts if not p.endswith(" ")) or "(초기)")
+    n_resave = len(r.diff.resave)
+    if n_resave:
+        line += f"  리세이브만 {n_resave}"
+    return line
 
 
 def run(cfg: Config, interval: float = 2.0, debounce: float = 5.0, *, out=None) -> int:

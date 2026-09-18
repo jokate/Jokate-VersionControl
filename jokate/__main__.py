@@ -122,7 +122,9 @@ def cmd_log(a: argparse.Namespace) -> int:
         return 0
     for s in snaps:
         n = st.db.execute("SELECT COUNT(*) FROM tree WHERE snapshot_id=?", (s.id,)).fetchone()[0]
-        print(f"#{s.id:<4} {storemod.format_ts(s.ts)}  {s.kind:<5} {n:>5}개  {s.message}")
+        _, d = st.show(s.id)
+        tag = "  (리세이브만)" if d.all_noise else ""
+        print(f"#{s.id:<4} {storemod.format_ts(s.ts)}  {s.kind:<5} {n:>5}개  {s.message}{tag}")
     return 0
 
 

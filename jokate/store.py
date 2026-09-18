@@ -4,8 +4,9 @@
 - 객체: <project>/.jokate/store/objects/<sha[:2]>/<sha>  (원본 그대로, 압축 없음, 내용주소)
 - 인덱스: <project>/.jokate/index.sqlite
     snapshots(id, parent, kind auto|label, message, ts)
-    tree(snapshot_id, rel, sha, size, cls, deps)
+    tree(snapshot_id, rel, sha, size, cls, deps, noise)
 - authored 등급만 대상. 변경 판단은 mtime 이 아니라 sha 비교.
+- noise: HEAD 대비 sha 는 바뀌었지만 export 직렬화 바이트는 동일(리세이브만)인 항목 표시.
 """
 from __future__ import annotations
 
@@ -17,11 +18,12 @@ import sys
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .config import ASSET_EXTS, Config
 from .scan import AssetRecord, _scan_one
+from .uasset import is_resave_only
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshots(
@@ -38,6 +40,7 @@ CREATE TABLE IF NOT EXISTS tree(
     size INTEGER NOT NULL,
     cls  TEXT NOT NULL DEFAULT '',
     deps TEXT NOT NULL DEFAULT '[]',
+    noise INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(snapshot_id, rel)
 );
 CREATE INDEX IF NOT EXISTS tree_sha ON tree(sha);
@@ -51,6 +54,7 @@ class TreeEntry:
     size: int
     cls: str = ""
     deps: list[str] = field(default_factory=list)
+    noise: bool = False   # 직전 스냅샷 대비 리세이브만(헤더만 변경)
 
 
 @dataclass
@@ -73,14 +77,29 @@ class Diff:
     def empty(self) -> bool:
         return not (self.added or self.modified or self.deleted or self.moved)
 
+    @property
+    def resave(self) -> list[tuple[TreeEntry, TreeEntry]]:
+        """modified 중 리세이브만(noise)인 (old, new)."""
+        return [(o, n) for o, n in self.modified if n.noise]
+
+    @property
+    def real_modified(self) -> list[tuple[TreeEntry, TreeEntry]]:
+        return [(o, n) for o, n in self.modified if not n.noise]
+
+    @property
+    def all_noise(self) -> bool:
+        """변경이 있고 그 전부가 리세이브만."""
+        return (not self.empty) and not (self.added or self.deleted or self.moved or self.real_modified)
+
     def by_class(self) -> dict[str, Counter]:
         out: dict[str, Counter] = {}
         for kind, items in (("added", self.added), ("deleted", self.deleted)):
             for e in items:
                 out.setdefault(e.cls or "?", Counter())[kind] += 1
-        for kind, items in (("modified", self.modified), ("moved", self.moved)):
-            for _, new in items:
-                out.setdefault(new.cls or "?", Counter())[kind] += 1
+        for _, new in self.modified:
+            out.setdefault(new.cls or "?", Counter())["resave" if new.noise else "modified"] += 1
+        for _, new in self.moved:
+            out.setdefault(new.cls or "?", Counter())["moved"] += 1
         return out
 
 
@@ -92,6 +111,11 @@ class Store:
         self.objects.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.db_path)
         self.db.executescript(SCHEMA)
+        # 마이그레이션: 옛 스키마(noise 없음)면 컬럼 추가, 기존 행은 0
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(tree)").fetchall()}
+        if "noise" not in cols:
+            self.db.execute("ALTER TABLE tree ADD COLUMN noise INTEGER NOT NULL DEFAULT 0")
+            self.db.commit()
 
     # ---- objects ----
     def object_path(self, sha: str) -> Path:
@@ -138,8 +162,20 @@ class Store:
     def tree(self, sid: int | None) -> dict[str, TreeEntry]:
         if sid is None:
             return {}
-        rows = self.db.execute("SELECT rel,sha,size,cls,deps FROM tree WHERE snapshot_id=?", (sid,)).fetchall()
-        return {r[0]: TreeEntry(r[0], r[1], r[2], r[3], json.loads(r[4])) for r in rows}
+        rows = self.db.execute("SELECT rel,sha,size,cls,deps,noise FROM tree WHERE snapshot_id=?", (sid,)).fetchall()
+        return {r[0]: TreeEntry(r[0], r[1], r[2], r[3], json.loads(r[4]), bool(r[5])) for r in rows}
+
+    def _mark_noise(self, old_tree: dict[str, TreeEntry], entries: list[TreeEntry]) -> None:
+        """HEAD 대비 sha 가 바뀐 항목마다 리세이브만인지 판정해 noise 표시(예외·파싱 실패는 False)."""
+        for e in entries:
+            o = old_tree.get(e.rel)
+            if o is None or o.sha == e.sha:
+                e.noise = False
+                continue
+            try:
+                e.noise = is_resave_only(self.object_path(o.sha), self.cfg.content / e.rel)
+            except Exception:
+                e.noise = False
 
     def _work_tree(self) -> dict[str, TreeEntry]:
         return {r.rel: TreeEntry(r.rel, r.sha, r.size, r.cls, r.deps) for r in self.scan_authored()}
@@ -176,6 +212,7 @@ class Store:
         else:
             new_tree = work
             to_store = list(work.values())
+        self._mark_noise(old_tree, to_store)
         d = diff_trees(old_tree, new_tree)
         if d.empty and parent is not None and not force:
             return None, d, 0
@@ -187,8 +224,9 @@ class Store:
         cur.execute("INSERT INTO snapshots(parent,kind,message,ts) VALUES(?,?,?,?)",
                     (parent.id if parent else None, kind, message, time.time()))
         sid = cur.lastrowid
-        cur.executemany("INSERT INTO tree(snapshot_id,rel,sha,size,cls,deps) VALUES(?,?,?,?,?,?)",
-                        [(sid, e.rel, e.sha, e.size, e.cls, json.dumps(e.deps)) for e in new_tree.values()])
+        cur.executemany("INSERT INTO tree(snapshot_id,rel,sha,size,cls,deps,noise) VALUES(?,?,?,?,?,?,?)",
+                        [(sid, e.rel, e.sha, e.size, e.cls, json.dumps(e.deps), int(e.noise))
+                         for e in new_tree.values()])
         self.db.commit()
         return self.get(sid), d, stored
 
@@ -204,7 +242,8 @@ class Store:
         s = self.get(sid)
         if s is None:
             raise KeyError(f"snapshot {sid} 없음")
-        target = self.tree(sid)
+        # noise 는 '직전 스냅샷 대비' 표시라 롤백 diff 에는 무의미 → 초기화
+        target = {rel: replace(e, noise=False) for rel, e in self.tree(sid).items()}
         recs = self.scan_authored()
         current = {r.rel: TreeEntry(r.rel, r.sha, r.size, r.cls, r.deps) for r in recs}
         if assets:
@@ -434,7 +473,10 @@ def format_diff(d: Diff) -> str:
     for e in d.added:
         lines.append(f"  A {e.rel}  [{e.cls or '?'}]")
     for o, n in d.modified:
-        lines.append(f"  M {n.rel}  [{n.cls or '?'}]  {o.size}→{n.size}B")
+        if n.noise:
+            lines.append(f"  M~ {n.rel}  [{n.cls or '?'}]  {o.size}→{n.size}B  (리세이브만)")
+        else:
+            lines.append(f"  M {n.rel}  [{n.cls or '?'}]  {o.size}→{n.size}B")
     for o, n in d.moved:
         lines.append(f"  R {o.rel} → {n.rel}  [{n.cls or '?'}]")
     for e in d.deleted:
@@ -446,7 +488,7 @@ def format_diff(d: Diff) -> str:
         lines.append("클래스별:")
         for cls in sorted(bc):
             c = bc[cls]
-            parts = [f"{k} {c[k]}" for k in ("added", "modified", "moved", "deleted") if c[k]]
+            parts = [f"{k} {c[k]}" for k in ("added", "modified", "resave", "moved", "deleted") if c[k]]
             lines.append(f"  {cls:<24} " + ", ".join(parts))
     return "\n".join(lines)
 

@@ -103,6 +103,14 @@ python -m jokate serve   <project> [--port 8765]                      # 타임�
 - 변경 판단은 mtime 이 아니라 sha 비교. 이동은 "sha 동일 + 경로 변경"으로 잡는다
 - vendor 등급은 스냅샷에 포함하지 않는다
 
+## noise(리세이브) 판정
+
+- 에디터가 내용 변경 없이 다시 저장하면 SavedHash·엔진 버전·썸네일·오프셋 등 헤더만 바뀌어 sha 가 달라진다
+- `snap` 시 HEAD 대비 sha 가 바뀐 애셋마다 `uasset.is_resave_only(HEAD 객체, 현재 파일)` 로 판정: 이름·임포트·익스포트 표가 같고 각 export 직렬화 바이트가 동일하면 `tree.noise=1` (파싱 실패·예외는 0)
+- `Diff.resave` / `real_modified` / `all_noise`, `by_class()` 는 noise 항목을 `modified` 대신 `resave` 로 집계. 변경 여부(`empty`) 판정은 그대로(리세이브도 스냅샷은 만든다)
+- 표시: `status`/`show` 는 `M~ rel [cls] (리세이브만)`, `log` 는 스냅샷 전체가 리세이브면 줄 끝에 `(리세이브만)`, `watch` 는 `리세이브만 N`
+- 옛 DB 는 `Store` 를 열 때 `ALTER TABLE tree ADD COLUMN noise` 로 자동 마이그레이션(기존 행 0)
+
 ## 구성
 
 - `jokate/uasset.py` — 패키지 헤더 파서 (요약·이름·임포트·익스포트·썸네일). UE 4.11 ~ 5.7 검증
