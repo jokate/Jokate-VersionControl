@@ -34,6 +34,18 @@ python -m jokate watch   <project> [--interval 2] [--debounce 5]      # 저장 �
 python -m jokate serve   <project> [--port 8765]                      # 타임라인 웹 UI (http://127.0.0.1:8765/)
 ```
 
+## 배치 파일 (더블클릭)
+
+경로를 타이핑하지 않는다: 처음 한 번 `.uproject` 파일 선택 창이 뜨고 `project.local.txt`(gitignore)에 기억한다. `.uproject` 를 bat 위에 끌어다 놓아도 된다.
+
+| 파일 | 하는 일 |
+|---|---|
+| `start.bat` | 자동 스냅샷(`watch`, 최소화 창) + 타임라인 웹 UI(`serve`) + 브라우저 열기. 이미 떠 있으면 브라우저만. Ctrl+C 로 끄면 watch 창도 닫힘. `JOKATE_NO_WATCH=1` / `JOKATE_NO_BROWSER=1` |
+| `snap.bat` | 올리지 않은 변경을 보여주고 메시지를 받아 라벨 스냅샷 (비우면 취소) |
+| `bridge-install.bat` | 에디터 브릿지 + 콘텐츠 브라우저 Jokate 메뉴 설치 |
+| `change-project.bat` | 기억한 프로젝트를 지우고 다시 선택 |
+| `_project.bat`, `tools/pick_project.ps1` | 공용 도우미 (직접 실행하지 않음). 처음 쓰는 프로젝트면 `init` 까지 실행 |
+
 ## 타임라인 웹 UI (serve)
 
 - 표준 라이브러리 `http.server` 만 사용, 프레임워크 없음. 단일 HTML + vanilla JS, 다크 테마, 한국어
