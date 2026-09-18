@@ -60,6 +60,22 @@ def _diff(d: Diff) -> dict:
 
 
 # ---- API 로직 (서버 독립) ----
+def api_info(store: Store) -> dict:
+    """상단 요약: 프로젝트명, 스냅샷 수, HEAD 추적 애셋 수, 객체 수·용량, 마지막 스냅샷."""
+    head = store.head()
+    n_snaps = store.db.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+    n_assets = store.db.execute("SELECT COUNT(*) FROM tree WHERE snapshot_id=?", (head.id,)).fetchone()[0] if head else 0
+    objects = 0
+    size = 0
+    if store.objects.exists():
+        for p in store.objects.rglob("*"):
+            if p.is_file() and not p.suffix:
+                objects += 1
+                size += p.stat().st_size
+    return {"project": store.cfg.root.name, "snapshots": n_snaps, "assets": n_assets,
+            "objects": objects, "store_bytes": size, "last": _snapshot(head) if head else None}
+
+
 def api_log(store: Store) -> list[dict]:
     trees: dict[int | None, dict[str, TreeEntry]] = {None: {}}
     out = []
@@ -212,6 +228,8 @@ def make_handler(cfg: Config):
             try:
                 if path in ("/", "/index.html"):
                     self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+                elif path == "/api/info":
+                    self._json(self._run(api_info))
                 elif path == "/api/log":
                     self._json(self._run(api_log))
                 elif path == "/api/status":

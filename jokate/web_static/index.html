@@ -2,111 +2,233 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<title>jokate 타임라인</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jokate</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
 <style>
-  :root { --bg:#14161a; --panel:#1c1f25; --line:#2a2e36; --fg:#e6e8eb; --dim:#8a919c; --acc:#5aa0ff;
-          --a:#3fb950; --m:#d29922; --r:#a371f7; --d:#f85149; }
+  :root {
+    --bg:#0b0e14; --bg2:#0f131b; --panel:#131822; --panel2:#171d29; --line:#222a38; --line2:#2c3648;
+    --fg:#e8ecf3; --fg2:#b9c2d0; --dim:#7d8799; --dim2:#5b6577;
+    --acc:#6c8cff; --acc2:#3fd2ff; --accg:linear-gradient(135deg,#6c8cff 0%,#3fd2ff 100%);
+    --a:#3ddc84; --m:#ffb547; --r:#b48cff; --d:#ff5d6c; --n:#d8c25a;
+    --shadow:0 10px 30px -10px rgba(0,0,0,.6), 0 2px 6px rgba(0,0,0,.35);
+    --radius:12px;
+  }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui, sans-serif; }
-  header { display:flex; gap:8px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); }
-  header h1 { font-size:16px; margin:0 16px 0 0; }
-  header input { flex:1; max-width:480px; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:6px 10px; }
-  button { background:var(--acc); color:#fff; border:0; border-radius:4px; padding:6px 12px; cursor:pointer; }
-  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
-  button.small { padding:2px 8px; font-size:12px; }
-  button.danger { background:var(--d); }
-  button:disabled { opacity:.5; cursor:default; }
-  #status { color:var(--dim); margin-left:8px; }
-  main { display:grid; grid-template-columns:340px 1fr; height:calc(100vh - 53px); }
-  #left { border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
-  #changes { border-bottom:2px solid var(--line); max-height:45%; overflow:auto; flex:0 0 auto; }
-  #changes .ph { display:flex; gap:8px; align-items:center; padding:8px 14px; position:sticky; top:0; background:var(--panel); border-bottom:1px solid var(--line); }
-  #changes .ph b { flex:1; }
-  #changes table { margin:0; }
-  #changes td, #changes th { padding:3px 6px; font-size:12px; }
-  #changes .sum { padding:6px 14px; font-size:12px; color:var(--dim); }
-  #timeline { overflow:auto; flex:1; }
-  .snap { padding:10px 14px; border-bottom:1px solid var(--line); cursor:pointer; }
-  .snap:hover { background:#20242b; }
-  .snap.sel { background:#232a36; border-left:3px solid var(--acc); }
-  .snap.auto { color:var(--dim); }
-  .snap.label .msg { font-weight:600; color:var(--fg); }
-  .snap .meta { font-size:12px; color:var(--dim); }
-  .snap .counts { font-size:12px; margin-top:2px; }
-  .snap.noise { opacity:.45; }
-  .snap.noise.sel { opacity:.8; }
-  .badge.noise { background:#3a3a2a; color:#c9b458; }
-  .hidden-noise { padding:4px 14px; font-size:11px; color:var(--dim); border-bottom:1px dashed var(--line); cursor:pointer; }
-  tr.noise { opacity:.5; }
-  tr.noise td.k { color:#c9b458; }
-  #showNoise { font-size:12px; color:var(--dim); margin-left:8px; white-space:nowrap; }
-  .badge { display:inline-block; font-size:11px; padding:0 6px; border-radius:10px; background:var(--line); color:var(--fg); margin:2px 4px 0 0; }
-  #detail { overflow:auto; padding:14px 18px; }
-  #detail h2 { font-size:15px; margin:0 0 4px; }
+  html, body { height:100%; }
+  body { margin:0; display:flex; flex-direction:column; overflow:hidden; background:radial-gradient(1200px 600px at 20% -10%, #1a2340 0%, transparent 60%), radial-gradient(900px 500px at 100% 0%, #11303a 0%, transparent 55%), var(--bg);
+         color:var(--fg); font:14px/1.5 "Pretendard Variable", Pretendard, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing:-.01em; }
+  ::-webkit-scrollbar { width:10px; height:10px; }
+  ::-webkit-scrollbar-thumb { background:#283042; border-radius:10px; border:2px solid transparent; background-clip:padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background:#36405a; background-clip:padding-box; border:2px solid transparent; }
+  button { font:inherit; border:0; border-radius:9px; padding:8px 14px; cursor:pointer; color:#fff; background:var(--accg); font-weight:600; box-shadow:0 6px 16px -6px rgba(108,140,255,.6); transition:transform .08s, filter .15s, box-shadow .15s; }
+  button:hover { filter:brightness(1.08); }
+  button:active { transform:translateY(1px); }
+  button.ghost { background:rgba(255,255,255,.04); color:var(--fg2); border:1px solid var(--line2); box-shadow:none; font-weight:500; }
+  button.ghost:hover { background:rgba(255,255,255,.08); color:var(--fg); }
+  button.small { padding:4px 10px; font-size:12px; border-radius:7px; }
+  button.danger { background:linear-gradient(135deg,#ff5d6c,#ff8a5b); box-shadow:0 6px 16px -6px rgba(255,93,108,.6); }
+  button:disabled { opacity:.45; cursor:default; filter:none; transform:none; }
+  input[type=text], input:not([type]) { font:inherit; background:rgba(0,0,0,.25); color:var(--fg); border:1px solid var(--line2); border-radius:9px; padding:8px 12px; outline:none; transition:border-color .15s, box-shadow .15s; }
+  input:focus { border-color:var(--acc); box-shadow:0 0 0 3px rgba(108,140,255,.2); }
+
+  /* ---------- 헤더 ---------- */
+  header { display:flex; align-items:center; gap:12px; padding:12px 20px; border-bottom:1px solid var(--line); background:rgba(15,19,27,.75); backdrop-filter:blur(10px); position:sticky; top:0; z-index:20; }
+  .logo { display:flex; align-items:center; gap:10px; margin-right:8px; }
+  .logo .mark { width:30px; height:30px; border-radius:9px; background:var(--accg); display:grid; place-items:center; font-weight:800; color:#0b0e14; box-shadow:0 6px 16px -4px rgba(63,210,255,.6); }
+  .logo h1 { margin:0; font-size:16px; font-weight:700; letter-spacing:-.02em; }
+  .logo .proj { font-size:12px; color:var(--dim); margin-left:6px; padding:2px 8px; border:1px solid var(--line2); border-radius:999px; }
+  header input { flex:1; max-width:520px; }
+  #status { color:var(--dim); font-size:12px; margin-left:auto; white-space:nowrap; }
+  #showNoise { font-size:12px; color:var(--dim); display:flex; align-items:center; gap:6px; white-space:nowrap; cursor:pointer; user-select:none; }
+  #showNoise input { accent-color:var(--acc); }
+
+  /* ---------- 통계 바 ---------- */
+  #stats { display:flex; gap:10px; padding:12px 20px 0; flex-wrap:wrap; }
+  .stat { flex:1 1 140px; background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.015)); border:1px solid var(--line); border-radius:var(--radius); padding:10px 14px; min-width:140px; }
+  .stat .l { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; }
+  .stat .v { font-size:20px; font-weight:700; margin-top:2px; letter-spacing:-.02em; }
+  .stat .v small { font-size:12px; color:var(--dim); font-weight:500; margin-left:4px; }
+  .stat.hot .v { background:var(--accg); -webkit-background-clip:text; background-clip:text; color:transparent; }
+
+  /* ---------- 레이아웃 ---------- */
+  main { display:grid; grid-template-columns:380px 1fr; gap:12px; padding:12px 20px 20px; flex:1; min-height:0; }
+  header, #stats { flex:0 0 auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+  .card > .ph { display:flex; gap:8px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line); background:linear-gradient(180deg, rgba(255,255,255,.03), transparent); }
+  .card > .ph b { font-size:13px; font-weight:700; }
+  .card > .ph .spacer { flex:1; }
+  #left { display:flex; flex-direction:column; gap:12px; min-height:0; }
+  #changes { flex:0 1 auto; max-height:46%; }
+  #changes.hot { box-shadow:0 0 0 2px var(--a), var(--shadow); }
+  #changesBody { overflow:auto; }
+  #changes .sum { padding:8px 14px 4px; font-size:12px; color:var(--dim); }
+  #changes td, #changes th { padding:5px 8px; font-size:12px; }
+  #changes table { table-layout:fixed; }
+  #changes th.cb { width:30px; } #changes th:nth-child(2) { width:38px; } #changes th:nth-child(4) { width:112px; }
+  #changes td:nth-child(5), #changes th:nth-child(5) { display:none; }
+  #changes td .rel, #detail td .rel { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #changes td:nth-child(3) { overflow:hidden; }
+  #changes .badge { white-space:nowrap; }
+  #tlcard { flex:1 1 auto; }
+  #timeline { overflow:auto; flex:1; padding:6px 0 12px; position:relative; }
+
+  /* ---------- 타임라인 ---------- */
+  .snap { position:relative; padding:10px 14px 10px 40px; cursor:pointer; transition:background .12s; border-left:3px solid transparent; }
+  .snap::before { content:""; position:absolute; left:19px; top:0; bottom:0; width:2px; background:var(--line2); }
+  .snap:first-child::before { top:18px; }
+  .snap:last-child::before { bottom:calc(100% - 18px); }
+  .snap::after { content:""; position:absolute; left:14px; top:14px; width:12px; height:12px; border-radius:50%; background:var(--dim2); border:2px solid var(--panel); box-shadow:0 0 0 2px var(--line2); }
+  .snap.label::after { background:var(--accg); box-shadow:0 0 0 2px var(--acc), 0 0 12px rgba(108,140,255,.7); }
+  .snap.noise::after { background:var(--n); box-shadow:0 0 0 2px #6a5f2a; }
+  .snap:hover { background:rgba(255,255,255,.03); }
+  .snap.sel { background:linear-gradient(90deg, rgba(108,140,255,.14), transparent); border-left-color:var(--acc); }
+  .snap .msg { font-weight:600; display:flex; align-items:center; gap:6px; }
+  .snap.auto .msg { color:var(--fg2); font-weight:500; }
+  .snap .id { font-size:11px; color:var(--dim); font-variant-numeric:tabular-nums; }
+  .snap .meta { font-size:12px; color:var(--dim); margin-top:1px; }
+  .snap .counts { font-size:12px; margin-top:4px; display:flex; gap:5px; flex-wrap:wrap; }
+  .snap.noise { opacity:.5; }
+  .snap.noise.sel { opacity:.9; }
+  .hidden-noise { margin:4px 14px 4px 40px; padding:5px 10px; font-size:11px; color:var(--dim); border:1px dashed var(--line2); border-radius:8px; cursor:pointer; }
+  .hidden-noise:hover { color:var(--fg2); border-color:var(--dim2); }
+
+  /* ---------- 배지·필 ---------- */
+  .pill { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; background:rgba(255,255,255,.06); color:var(--fg2); }
+  .pill.modified { color:var(--m); background:rgba(255,181,71,.12); }
+  .pill.added { color:var(--a); background:rgba(61,220,132,.12); }
+  .pill.moved { color:var(--r); background:rgba(180,140,255,.12); }
+  .pill.deleted { color:var(--d); background:rgba(255,93,108,.12); }
+  .pill.resave { color:var(--n); background:rgba(216,194,90,.12); }
+  .badge { display:inline-block; font-size:11px; padding:0 8px; border-radius:999px; margin:2px 4px 0 0; font-weight:500;
+           background:hsl(var(--h) 60% 22% / .7); color:hsl(var(--h) 90% 78%); border:1px solid hsl(var(--h) 50% 32% / .8); }
+  .badge.noise { --h:50; }
+  .k { font-weight:800; width:34px; font-variant-numeric:tabular-nums; }
+  .k span { display:inline-block; min-width:22px; text-align:center; border-radius:6px; padding:0 5px; font-size:11px; }
+  .k.A span { color:var(--a); background:rgba(61,220,132,.14); } .k.M span { color:var(--m); background:rgba(255,181,71,.14); }
+  .k.R span { color:var(--r); background:rgba(180,140,255,.14); } .k.D span { color:var(--d); background:rgba(255,93,108,.14); }
+  tr.noise .k span { color:var(--n); background:rgba(216,194,90,.14); }
+  tr.noise { opacity:.55; }
+
+  /* ---------- 표 ---------- */
+  table { border-collapse:separate; border-spacing:0; width:100%; margin:6px 0 12px; }
+  td, th { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); font-size:13px; }
+  th { color:var(--dim); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.05em; position:sticky; top:0; background:var(--panel); z-index:1; }
+  th.cb, td.cb { width:30px; padding-right:0; }
+  td.cb input, th.cb input { accent-color:var(--acc); }
+  tr.row { cursor:pointer; user-select:none; transition:background .1s; }
+  tr.row:hover { background:rgba(255,255,255,.035); }
+  tr.row.sel { background:rgba(108,140,255,.16); }
+  tr.row.sel td { border-bottom-color:rgba(108,140,255,.25); }
+  tr.row.hist td:nth-child(3) { color:var(--acc2); }
+  .selcount { color:var(--acc2); font-size:11px; font-weight:600; margin-left:6px; text-transform:none; letter-spacing:0; }
+  .rel { font-family:ui-monospace, "Cascadia Code", Consolas, monospace; font-size:12.5px; }
+  .rel .dir { color:var(--dim); }
   .dim { color:var(--dim); }
-  table { border-collapse:collapse; width:100%; margin:8px 0 14px; }
-  td, th { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line); font-size:13px; }
-  th { color:var(--dim); font-weight:normal; }
-  th.cb, td.cb { width:26px; padding-right:0; }
-  tr.row { cursor:pointer; user-select:none; }
-  tr.row:hover { background:#20242b; }
-  tr.row.sel { background:#263247; }
-  tr.row.hist { outline:1px solid var(--acc); }
-  .selcount { color:var(--acc); font-size:12px; }
-  .k { font-weight:700; width:24px; }
-  .k.A { color:var(--a);} .k.M { color:var(--m);} .k.R { color:var(--r);} .k.D { color:var(--d);}
-  #history { border-top:1px solid var(--line); margin-top:16px; padding-top:12px; }
-  .versions { display:flex; gap:12px; overflow-x:auto; padding:6px 0; }
-  .ver { min-width:150px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px; font-size:12px; cursor:context-menu; }
-  .ver.changed { border-color:var(--m); }
-  .ver img { width:128px; height:128px; object-fit:contain; background:#0d0f12; border-radius:4px; display:block; margin-bottom:6px; }
-  .ver .nothumb { width:128px; height:128px; display:flex; align-items:center; justify-content:center; color:var(--dim); background:#0d0f12; border-radius:4px; margin-bottom:6px; }
-  .warn { background:#3a2a12; border:1px solid var(--m); border-radius:6px; padding:8px 12px; margin:8px 0; }
-  .err { background:#3a1a1a; border:1px solid var(--d); border-radius:6px; padding:8px 12px; margin:8px 0; color:#ffb3ad; }
-  .note { background:#1a2a3a; border:1px solid var(--acc); border-radius:6px; padding:8px 12px; margin:8px 0; }
-  .ok { color:var(--a); }
-  #restore { margin-top:16px; }
-  #changes.hot { outline:2px solid var(--a); box-shadow:0 0 0 4px #4caf5033; }
-  .hint { font-size:12px; color:var(--dim); }
-  /* 컨텍스트 메뉴 */
-  #ctx { display:none; position:fixed; z-index:50; min-width:220px; background:var(--panel); border:1px solid var(--line); border-radius:6px; box-shadow:0 6px 20px #000a; padding:4px 0; }
-  #ctx .item { padding:6px 14px; cursor:pointer; font-size:13px; }
-  #ctx .item:hover { background:#263247; }
-  #ctx .item.disabled { color:var(--dim); cursor:default; }
-  #ctx .item.disabled:hover { background:transparent; }
-  #ctx .sep { border-top:1px solid var(--line); margin:4px 0; }
-  /* 모달 */
-  #modal { display:none; position:fixed; inset:0; z-index:40; background:#000a; align-items:center; justify-content:center; }
-  #modalBox { background:var(--panel); border:1px solid var(--line); border-radius:8px; width:min(760px, 92vw); max-height:88vh; overflow:auto; padding:16px 20px; }
-  #modalBox h3 { margin:0 0 8px; font-size:15px; }
-  #modalBox input { width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:6px 10px; margin:8px 0; }
-  .btns { display:flex; gap:8px; justify-content:flex-end; margin-top:12px; }
+  .hint { font-size:12px; color:var(--dim2); }
+
+  /* ---------- 상세 ---------- */
+  #detail { overflow:auto; padding:0; }
+  #detail .empty { height:100%; display:grid; place-items:center; color:var(--dim); text-align:center; padding:40px; }
+  #detail .empty .ico { font-size:44px; margin-bottom:10px; opacity:.6; }
+  .dhead { padding:16px 20px 12px; border-bottom:1px solid var(--line); background:linear-gradient(180deg, rgba(108,140,255,.07), transparent); }
+  .dhead h2 { margin:0; font-size:18px; font-weight:700; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .dhead h2 .id { font-size:12px; color:var(--acc2); font-weight:700; padding:2px 8px; border:1px solid rgba(63,210,255,.35); border-radius:999px; }
+  .dhead .sub { color:var(--dim); font-size:12px; margin-top:4px; }
+  .dhead .bar { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .dbody { padding:6px 20px 20px; }
+  .sect { margin-top:18px; display:flex; align-items:center; gap:10px; }
+  .sect h3 { margin:0; font-size:13px; font-weight:700; color:var(--fg2); }
+  .sect .hint { margin-left:auto; }
+  #restore { margin-top:10px; }
+  .agg { display:flex; gap:8px; flex-wrap:wrap; margin:4px 0 8px; }
+  .agg .cell { background:rgba(255,255,255,.03); border:1px solid var(--line); border-radius:9px; padding:6px 10px; font-size:12px; display:flex; gap:8px; align-items:center; }
+
+  /* ---------- 버전 히스토리 ---------- */
+  .versions { display:flex; gap:12px; overflow-x:auto; padding:8px 2px 12px; }
+  .ver { flex:0 0 172px; background:var(--panel2); border:1px solid var(--line); border-radius:12px; padding:8px; font-size:12px; cursor:context-menu; transition:transform .12s, border-color .12s, box-shadow .12s; }
+  .ver:hover { transform:translateY(-2px); border-color:var(--line2); box-shadow:var(--shadow); }
+  .ver.changed { border-color:rgba(255,181,71,.5); }
+  .ver .th { position:relative; width:156px; height:156px; border-radius:9px; overflow:hidden; background:
+      linear-gradient(45deg,#0d1017 25%,transparent 25%,transparent 75%,#0d1017 75%),linear-gradient(45deg,#0d1017 25%,#131722 25%,#131722 75%,#0d1017 75%);
+      background-size:16px 16px; background-position:0 0,8px 8px; margin-bottom:8px; display:grid; place-items:center; }
+  .ver img { width:156px; height:156px; object-fit:contain; display:block; }
+  .ver .nothumb { color:var(--dim2); font-size:12px; }
+  .ver .tag { position:absolute; top:6px; left:6px; }
+  .ver .vid { font-weight:700; }
+  .ver .sha { font-family:ui-monospace, Consolas, monospace; color:var(--dim); }
+  .ver .vmsg { color:var(--fg2); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  /* ---------- 알림 박스 ---------- */
+  .warn, .err, .note { border-radius:10px; padding:10px 14px; margin:8px 0; font-size:13px; }
+  .warn { background:rgba(255,181,71,.1); border:1px solid rgba(255,181,71,.4); }
+  .err { background:rgba(255,93,108,.1); border:1px solid rgba(255,93,108,.45); color:#ffc2c8; }
+  .note { background:rgba(108,140,255,.1); border:1px solid rgba(108,140,255,.4); }
+  .ok { color:var(--a); font-weight:600; }
   ul.dirty { margin:6px 0 0; padding-left:18px; }
-  /* 토스트 */
-  #toast { position:fixed; right:16px; bottom:16px; z-index:60; display:flex; flex-direction:column; gap:6px; }
-  #toast div { background:#233524; border:1px solid var(--a); border-radius:6px; padding:8px 14px; box-shadow:0 4px 14px #0008; animation:fade 4s forwards; }
-  #toast div.bad { background:#3a1a1a; border-color:var(--d); }
-  @keyframes fade { 0%,80% { opacity:1; } 100% { opacity:0; } }
+
+  /* ---------- 컨텍스트 메뉴 ---------- */
+  #ctx { display:none; position:fixed; z-index:50; min-width:250px; background:rgba(23,29,41,.92); backdrop-filter:blur(12px); border:1px solid var(--line2); border-radius:11px; box-shadow:var(--shadow); padding:6px; animation:pop .1s ease-out; }
+  #ctx .item { padding:8px 12px; cursor:pointer; font-size:13px; border-radius:7px; display:flex; align-items:center; gap:10px; }
+  #ctx .item .ic { width:18px; text-align:center; opacity:.8; }
+  #ctx .item:hover { background:rgba(108,140,255,.18); }
+  #ctx .item.disabled { color:var(--dim2); cursor:default; }
+  #ctx .item.disabled:hover { background:transparent; }
+  #ctx .sep { border-top:1px solid var(--line); margin:5px 4px; }
+  @keyframes pop { from { transform:scale(.96) translateY(-3px); } to { transform:none; } }
+
+  /* ---------- 모달 ---------- */
+  #modal { display:none; position:fixed; inset:0; z-index:40; background:rgba(5,7,12,.6); backdrop-filter:blur(6px); align-items:center; justify-content:center; }
+  #modalBox { background:var(--panel); border:1px solid var(--line2); border-radius:16px; width:min(800px, 92vw); max-height:88vh; overflow:auto; padding:20px 24px; box-shadow:0 30px 80px -20px rgba(0,0,0,.8); animation:rise .16s ease-out; }
+  @keyframes rise { from { transform:translateY(12px) scale(.985); } to { transform:none; } }
+  #modalBox h3 { margin:0 0 6px; font-size:17px; font-weight:700; }
+  #modalBox input { width:100%; margin:10px 0; }
+  #modalBox .err, #modalBox table { max-height:240px; overflow:auto; display:block; }
+  #modalBox table { display:table; max-height:none; }
+  #modalBox .tbl { max-height:260px; overflow:auto; }
+  .btns { display:flex; gap:8px; justify-content:flex-end; margin-top:14px; }
+
+  /* ---------- 토스트 ---------- */
+  #toast { position:fixed; right:20px; bottom:20px; z-index:60; display:flex; flex-direction:column; gap:8px; }
+  #toast div { background:rgba(19,24,34,.95); border:1px solid rgba(61,220,132,.5); border-left:4px solid var(--a); border-radius:10px; padding:10px 16px; box-shadow:var(--shadow); animation:toastin .2s ease-out, fade 4.2s forwards; font-weight:500; }
+  #toast div.bad { border-color:rgba(255,93,108,.5); border-left-color:var(--d); }
+  @keyframes toastin { from { transform:translateX(24px); } to { transform:none; } }
+  @keyframes fade { 0%,85% { opacity:1; } 100% { opacity:0; } }
+
+  @media (max-width: 900px) {
+    main { grid-template-columns:1fr; height:auto; }
+    #changes { max-height:none; }
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>jokate</h1>
-  <input id="msg" placeholder="스냅샷 메시지" maxlength="200">
+  <div class="logo"><div class="mark">J</div><h1>Jokate</h1><span class="proj" id="proj">…</span></div>
+  <input id="msg" placeholder="스냅샷 메시지 — 예: 대시 공격 몽타주 연결" maxlength="200">
   <button id="mksnap">스냅샷 만들기</button>
   <button id="reload" class="ghost">새로고침</button>
   <label id="showNoise"><input type="checkbox" id="showNoiseCb"> 리세이브 스냅샷 보기</label>
   <span id="status"></span>
 </header>
+<div id="stats">
+  <div class="stat hot"><div class="l">올릴 변경</div><div class="v" id="stChanges">–</div></div>
+  <div class="stat"><div class="l">스냅샷</div><div class="v" id="stSnaps">–</div></div>
+  <div class="stat"><div class="l">추적 애셋</div><div class="v" id="stAssets">–</div></div>
+  <div class="stat"><div class="l">저장소</div><div class="v" id="stStore">–</div></div>
+  <div class="stat"><div class="l">마지막 스냅샷</div><div class="v" id="stLast">–</div></div>
+</div>
 <main>
   <div id="left">
-    <div id="changes" data-list="changes">
-      <div class="ph"><b>현재 변경사항</b><span class="selcount"></span><button id="reloadStatus" class="ghost small">새로고침</button></div>
-      <div id="changesBody"><p class="dim" style="padding:10px 14px">불러오는 중…</p></div>
+    <div id="changes" class="card" data-list="changes">
+      <div class="ph"><b>현재 변경사항</b><span class="selcount"></span><span class="spacer"></span><button id="reloadStatus" class="ghost small">새로고침</button></div>
+      <div id="changesBody"><p class="dim" style="padding:12px 14px">불러오는 중…</p></div>
     </div>
-    <div id="timeline"></div>
+    <div id="tlcard" class="card">
+      <div class="ph"><b>타임라인</b><span class="spacer"></span><span class="hint">라벨 = 밝은 점 · 자동 = 흐린 점</span></div>
+      <div id="timeline"></div>
+    </div>
   </div>
-  <div id="detail" data-list="detail"><p class="dim">왼쪽에서 스냅샷을 선택하세요.</p></div>
+  <div id="detail" class="card" data-list="detail"><div class="empty"><div><div class="ico">🕘</div>왼쪽 타임라인에서 스냅샷을 선택하세요</div></div></div>
 </main>
 <div id="ctx"></div>
 <div id="modal"><div id="modalBox"></div></div>
@@ -122,6 +244,9 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const status = t => { $('#status').textContent = t; };
 const JSONH = {'Content-Type': 'application/json'};
+const hue = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % 360; };
+const fmtB = n => n == null ? '' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : n + ' B';
+const relHtml = rel => { const i = rel.lastIndexOf('/'); return i < 0 ? `<span class="rel">${esc(rel)}</span>` : `<span class="rel"><span class="dir">${esc(rel.slice(0, i + 1))}</span>${esc(rel.slice(i + 1))}</span>`; };
 
 async function api(path, opt) {
   const r = await fetch(path, opt);
@@ -131,16 +256,32 @@ async function api(path, opt) {
 }
 function toast(msg, bad) {
   const d = document.createElement('div'); d.textContent = msg; if (bad) d.className = 'bad';
-  $('#toast').appendChild(d); setTimeout(() => d.remove(), 4200);
+  $('#toast').appendChild(d); setTimeout(() => d.remove(), 4400);
 }
 function countsText(c) {
   return ORDER.filter(k => c[k]).map(k => `${KIND[k]} ${c[k]}`).join(' · ') || '변경 없음';
 }
+function pills(c) {
+  return ORDER.filter(k => c[k]).map(k => `<span class="pill ${k}">${KIND[k]} ${c[k]}</span>`).join('') || '<span class="pill">변경 없음</span>';
+}
 function badges(bc) {
   return Object.keys(bc).map(cls => {
     const n = Object.values(bc[cls]).reduce((a, b) => a + b, 0);
-    return `<span class="badge">${esc(cls)} ${n}</span>`;
+    return `<span class="badge" style="--h:${hue(cls)}">${esc(cls)} ${n}</span>`;
   }).join('');
+}
+const clsBadge = cls => `<span class="badge" style="--h:${hue(cls)}">${esc(cls)}</span>`;
+
+// ---- 통계 ----
+async function loadInfo() {
+  try {
+    const i = await api('/api/info');
+    $('#proj').textContent = i.project;
+    $('#stSnaps').textContent = i.snapshots;
+    $('#stAssets').innerHTML = `${i.assets}<small>authored</small>`;
+    $('#stStore').innerHTML = `${fmtB(i.store_bytes)}<small>${i.objects}개</small>`;
+    $('#stLast').innerHTML = i.last ? `<span style="font-size:15px">${esc(i.last.time.slice(5, 16))}</span><small>#${i.last.id}</small>` : '없음';
+  } catch (e) { /* 통계는 실패해도 UI 는 동작 */ }
 }
 
 // ---- 다중 선택 ----
@@ -151,7 +292,7 @@ const listEl = name => document.querySelector(`[data-list="${name}"]`);
 const listRows = name => [...listEl(name).querySelectorAll('tr.row')];
 function paintSel(name) {
   const s = sel[name], rows = listRows(name);
-  rows.forEach(tr => tr.classList.toggle('sel', s.has(tr.dataset.rel)));
+  rows.forEach(tr => { tr.classList.toggle('sel', s.has(tr.dataset.rel)); const c = tr.querySelector('td.cb input'); if (c) c.checked = s.has(tr.dataset.rel); });
   const cnt = listEl(name).querySelector('.selcount');
   if (cnt) cnt.textContent = s.size ? `${s.size}개 선택` : '';
   const cb = listEl(name).querySelector('.selall');
@@ -175,7 +316,7 @@ function selectAll(name, on) {
   if (on) listRows(name).forEach(t => s.add(t.dataset.rel));
   paintSel(name);
 }
-function pruneSel(name) {  // 목록 갱신 후 사라진 항목 제거
+function pruneSel(name) {
   const have = new Set(listRows(name).map(t => t.dataset.rel));
   for (const r of [...sel[name]]) if (!have.has(r)) sel[name].delete(r);
 }
@@ -200,7 +341,8 @@ function openMenu(x, y, items) {
   for (const it of items) {
     if (it === '-') { const s = document.createElement('div'); s.className = 'sep'; m.appendChild(s); continue; }
     const d = document.createElement('div');
-    d.className = 'item' + (it.disabled ? ' disabled' : ''); d.textContent = it.label;
+    d.className = 'item' + (it.disabled ? ' disabled' : '');
+    d.innerHTML = `<span class="ic">${it.ic || ''}</span><span>${esc(it.label)}</span>`;
     if (!it.disabled) d.onclick = () => { closeMenu(); it.run(); };
     m.appendChild(d);
   }
@@ -217,18 +359,18 @@ document.addEventListener('scroll', closeMenu, true);
 function menuFor(name) {
   const rels = [...sel[name]], n = rels.length;
   if (name === 'changes') return [
-    {label: `선택한 것만 올리기 (${n})`, disabled: !n, run: () => snapFlow(rels)},
-    {label: '전부 올리기', run: () => snapFlow([])},
+    {ic:'⬆', label: `선택한 것만 올리기 (${n})`, disabled: !n, run: () => snapFlow(rels)},
+    {ic:'⏫', label: '전부 올리기', run: () => snapFlow([])},
     '-',
-    {label: `선택한 것 되돌리기 — 마지막 스냅샷 #${headId ?? '-'} 상태로 (${n})`, disabled: !n || headId == null, run: () => restoreFlow(headId, rels)},
+    {ic:'↩', label: `선택한 것 되돌리기 — 마지막 스냅샷 #${headId ?? '-'} 상태로 (${n})`, disabled: !n || headId == null, run: () => restoreFlow(headId, rels)},
   ];
   return [
-    {label: `선택한 애셋을 이 시점(#${selected})으로 되돌리기 (${n})`, disabled: !n || selected == null, run: () => restoreFlow(selected, rels)},
-    {label: `이 스냅샷(#${selected}) 전체로 되돌리기`, disabled: selected == null, run: () => restoreFlow(selected, [])},
+    {ic:'↩', label: `선택한 애셋을 이 시점(#${selected})으로 되돌리기 (${n})`, disabled: !n || selected == null, run: () => restoreFlow(selected, rels)},
+    {ic:'⟲', label: `이 스냅샷(#${selected}) 전체로 되돌리기`, disabled: selected == null, run: () => restoreFlow(selected, [])},
   ];
 }
 $('#changes').oncontextmenu = e => {
-  if (e.target.closest('tr.row')) return;  // 행은 bindList 에서 처리
+  if (e.target.closest('tr.row')) return;
   e.preventDefault(); activeList = 'changes'; openMenu(e.clientX, e.clientY, menuFor('changes'));
 };
 
@@ -271,12 +413,12 @@ async function loadLog() {
     headId = lastLog.length ? Math.max(...lastLog.map(s => s.id)) : null;
     renderTimeline();
     status(`스냅샷 ${lastLog.length}개`);
+    loadInfo();
   } catch (e) { status('오류: ' + e.message); }
 }
-// all_noise(리세이브만) 스냅샷은 흐리게 + 배지. 토글이 꺼져 있으면 연속된 것을 한 줄로 접는다(선택된 것은 항상 표시)
 function renderTimeline() {
   const tl = $('#timeline');
-  tl.innerHTML = lastLog.length ? '' : '<p class="dim" style="padding:14px">스냅샷 없음</p>';
+  tl.innerHTML = lastLog.length ? '' : '<div class="empty" style="padding:30px;text-align:center" ><div class="dim">아직 스냅샷이 없습니다<br><span class="hint">위에서 메시지를 적고 "스냅샷 만들기"</span></div></div>';
   let hidden = [];
   const flush = () => {
     if (!hidden.length) return;
@@ -292,9 +434,9 @@ function renderTimeline() {
     const div = document.createElement('div');
     div.className = `snap ${s.kind}` + (s.all_noise ? ' noise' : '') + (s.id === selected ? ' sel' : '');
     div.dataset.id = s.id;
-    div.innerHTML = `<div class="msg">#${s.id} ${esc(s.message || (s.kind === 'auto' ? '(자동)' : ''))}${s.all_noise ? ' <span class="badge noise">리세이브만</span>' : ''}</div>
-      <div class="meta">${esc(s.time)} · ${s.kind} · ${s.total}개</div>
-      <div class="counts">${countsText(s.counts)}</div><div>${badges(s.by_class)}</div>`;
+    div.innerHTML = `<div class="msg"><span class="id">#${s.id}</span>${esc(s.message || (s.kind === 'auto' ? '자동 저장' : ''))}${s.all_noise ? ' <span class="badge noise">리세이브만</span>' : ''}</div>
+      <div class="meta">${esc(s.time)} · ${s.total}개 추적</div>
+      <div class="counts">${pills(s.counts)}</div><div>${badges(s.by_class)}</div>`;
     div.onclick = () => select(s.id);
     tl.appendChild(div);
   }
@@ -312,22 +454,23 @@ async function loadStatus() {
   try {
     const {diff: d} = await api('/api/status');
     const rs = rows(d);
-    if (!rs.length) { body.innerHTML = '<p class="dim" style="padding:10px 14px">올릴 변경 없음</p>'; sel.changes.clear(); paintSel('changes'); return; }
-    body.innerHTML = `<div class="sum">${countsText(d.counts)} · ${badges(d.by_class)}</div>` + diffTable(d, 'changes', false);
+    const total = rs.length;
+    $('#stChanges').innerHTML = total ? `${total}<small>${countsText(d.counts)}</small>` : '0<small>깨끗함</small>';
+    if (!total) { body.innerHTML = '<div class="empty" style="padding:24px;text-align:center"><div class="dim">✓ 올릴 변경 없음</div></div>'; sel.changes.clear(); paintSel('changes'); return; }
+    body.innerHTML = `<div class="sum">${pills(d.counts)} &nbsp;${badges(d.by_class)}</div>` + diffTable(d, 'changes', false);
     bindList('changes');
   } catch (e) { body.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
 function rows(d) {
   const out = [];
-  for (const x of d.modified) if (!x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${x.old.size}→${x.new.size}B`]);
-  for (const x of d.added) out.push(['A', x.rel, x.cls, `${x.size}B`]);
+  for (const x of d.modified) if (!x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${fmtB(x.old.size)} → ${fmtB(x.new.size)}`]);
+  for (const x of d.added) out.push(['A', x.rel, x.cls, fmtB(x.size)]);
   for (const x of d.moved) out.push(['R', x.new.rel, x.new.cls, `← ${x.old.rel}`]);
-  for (const x of d.deleted) out.push(['D', x.rel, x.cls, `${x.size}B`]);
-  for (const x of d.modified) if (x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${x.old.size}→${x.new.size}B · 리세이브만`, true]);
+  for (const x of d.deleted) out.push(['D', x.rel, x.cls, fmtB(x.size)]);
+  for (const x of d.modified) if (x.new.noise) out.push(['M', x.new.rel, x.new.cls, `${fmtB(x.new.size)} · 리세이브만`, true]);
   return out;
 }
-// listName 이 있으면 선택 가능한 목록(헤더 체크박스·선택 수). withClass: 클래스별 집계 표
 function diffTable(d, listName, withClass = true) {
   const rs = rows(d);
   if (!rs.length) return '<p class="dim">변경 없음</p>';
@@ -335,20 +478,15 @@ function diffTable(d, listName, withClass = true) {
     `<th></th><th>애셋${listName ? ' <span class="selcount"></span>' : ''}</th><th>클래스</th><th></th></tr>`;
   for (const [k, rel, cls, extra, noise] of rs)
     h += `<tr class="${listName ? 'row' : ''}${noise ? ' noise' : ''}" data-rel="${esc(rel)}">` + (listName ? `<td class="cb"><input type="checkbox" tabindex="-1" ${sel[listName].has(rel) ? 'checked' : ''}></td>` : '') +
-      `<td class="k ${k}" title="${noise ? '리세이브만(헤더만 변경)' : ''}">${k}${noise ? '~' : ''}</td><td>${esc(rel)}</td><td><span class="badge">${esc(cls)}</span></td><td class="dim">${esc(extra)}</td></tr>`;
+      `<td class="k ${k}" title="${noise ? '리세이브만(헤더만 변경)' : KIND[{A:'added',M:'modified',R:'moved',D:'deleted'}[k]]}"><span>${k}${noise ? '~' : ''}</span></td><td>${relHtml(rel)}</td><td>${clsBadge(cls)}</td><td class="dim">${esc(extra)}</td></tr>`;
   h += '</table>';
-  if (d.counts && d.counts.resave) h += `<div class="dim" style="font-size:12px">리세이브만 ${d.counts.resave}${d.all_noise ? ' · 이 변경은 전부 리세이브만' : ''}</div>`;
+  if (d.counts && d.counts.resave) h += `<div class="hint">리세이브만 ${d.counts.resave}${d.all_noise ? ' · 이 변경은 전부 리세이브만' : ''}</div>`;
   const bc = Object.keys(d.by_class);
   if (withClass && bc.length) {
-    h += '<table><tr><th>클래스</th><th>집계</th></tr>';
-    for (const cls of bc) h += `<tr><td>${esc(cls)}</td><td>${countsText(d.by_class[cls])}</td></tr>`;
-    h += '</table>';
+    h += '<div class="agg">' + bc.map(cls => `<div class="cell">${clsBadge(cls)}<span>${pills(d.by_class[cls])}</span></div>`).join('') + '</div>';
   }
   return h;
 }
-// 행 체크박스는 표시용: 선택 상태를 따라간다
-const _paint = paintSel;
-paintSel = function (name) { _paint(name); listRows(name).forEach(tr => { const c = tr.querySelector('td.cb input'); if (c) c.checked = sel[name].has(tr.dataset.rel); }); };
 
 async function select(id) {
   selected = id; selectedRel = null; sel.detail.clear();
@@ -356,49 +494,51 @@ async function select(id) {
   const det = $('#detail');
   try {
     const {snapshot: s, diff: d} = await api('/api/snap/' + id);
-    det.innerHTML = `<h2>#${s.id} ${esc(s.message || '(자동)')}</h2>
-      <div class="dim">${esc(s.time)} · ${s.kind} · 직전 #${s.parent ?? '-'} 대비 ${countsText(d.counts)}</div>
-      <div class="hint">클릭 선택 · Shift 범위 · Ctrl 추가 · Ctrl+A 전체 · Esc 해제 · 우클릭 메뉴</div>
+    det.innerHTML = `<div class="dhead"><h2><span class="id">#${s.id}</span>${esc(s.message || '자동 저장')}${d.all_noise ? ' <span class="badge noise">리세이브만</span>' : ''}</h2>
+      <div class="sub">${esc(s.time)} · ${s.kind === 'label' ? '라벨' : '자동'} · 직전 #${s.parent ?? '-'} 대비</div>
+      <div class="bar">${pills(d.counts)}</div></div>
+      <div class="dbody">
+      <div class="sect"><h3>변경 애셋</h3><span class="hint">클릭 선택 · Shift 범위 · Ctrl 추가 · Ctrl+A 전체 · Esc 해제 · 우클릭 메뉴</span></div>
       ${diffTable(d, 'detail')}
-      <div id="restore"><button id="preview" class="ghost">이 스냅샷 전체로 되돌리기…</button></div>
-      <div id="history"></div>`;
+      <div id="restore"><button id="preview" class="ghost">⟲ 이 스냅샷 전체로 되돌리기…</button></div>
+      <div id="history"></div></div>`;
     bindList('detail', tr => showHistory(tr.dataset.rel, tr));
     $('#preview').onclick = () => restoreFlow(id, []);
-  } catch (e) { det.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  } catch (e) { det.innerHTML = `<div class="dbody"><div class="err">${esc(e.message)}</div></div>`; }
 }
 
 async function showHistory(rel, tr) {
   selectedRel = rel;
   document.querySelectorAll('#detail tr.row').forEach(e => e.classList.toggle('hist', e === tr));
   const h = $('#history');
-  h.innerHTML = `<h2>${esc(rel)} 버전 히스토리</h2><p class="dim">불러오는 중…</p>`;
+  const head = `<div class="sect"><h3>버전 히스토리 — ${relHtml(rel)}</h3><span class="hint">카드 우클릭 → 이 버전으로 되돌리기</span></div>`;
+  h.innerHTML = head + '<p class="dim">불러오는 중…</p>';
   try {
     const {versions} = await api('/api/asset?rel=' + encodeURIComponent(rel));
-    if (!versions.length) { h.innerHTML += '<p class="dim">기록 없음</p>'; return; }
-    let html = `<h2>${esc(rel)} 버전 히스토리</h2><div class="hint">카드 우클릭 → 이 버전으로 되돌리기</div><div class="versions">`;
+    if (!versions.length) { h.innerHTML = head + '<p class="dim">기록 없음</p>'; return; }
+    let html = head + '<div class="versions">';
     for (const v of versions) {
       const thumb = v.sha
         ? `<img loading="lazy" src="/api/thumb?sha=${v.sha}" alt="" onerror="this.outerHTML='<div class=nothumb>썸네일 없음</div>'">`
         : '<div class="nothumb">삭제됨</div>';
-      html += `<div class="ver ${v.changed ? 'changed' : ''}" data-id="${v.id}">${thumb}
-        <div><b>#${v.id}</b> ${esc(KIND[v.state] || '동일')}</div>
-        <div class="dim">${esc(v.time)}</div>
-        <div class="dim">${v.size != null ? v.size + 'B' : ''} ${v.sha ? v.sha.slice(0, 8) : ''}</div>
-        <div>${esc(v.message)}</div></div>`;
+      html += `<div class="ver ${v.changed ? 'changed' : ''}" data-id="${v.id}"><div class="th">${thumb}<span class="tag pill ${v.state === 'same' ? '' : v.state}">${esc(KIND[v.state] || '동일')}</span></div>
+        <div><span class="vid">#${v.id}</span> <span class="dim">${esc(v.time.slice(5, 16))}</span></div>
+        <div class="sha">${fmtB(v.size)} · ${v.sha ? v.sha.slice(0, 8) : ''}</div>
+        <div class="vmsg" title="${esc(v.message)}">${esc(v.message || (v.kind === 'auto' ? '자동 저장' : ''))}</div></div>`;
     }
     h.innerHTML = html + '</div>';
     h.querySelectorAll('.ver').forEach(card => card.oncontextmenu = e => {
       e.preventDefault();
       const vid = +card.dataset.id;
-      openMenu(e.clientX, e.clientY, [{label: `이 버전(#${vid})으로 되돌리기: ${rel}`, run: () => restoreFlow(vid, [rel])}]);
+      openMenu(e.clientX, e.clientY, [{ic:'↩', label: `이 버전(#${vid})으로 되돌리기: ${rel}`, run: () => restoreFlow(vid, [rel])}]);
     });
-  } catch (e) { h.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  } catch (e) { h.innerHTML = head + `<div class="err">${esc(e.message)}</div>`; }
 }
 
 // ---- 올리기 ----
 async function snapFlow(only) {
   const message = await promptMessage(only.length ? `선택한 ${only.length}개만 올리기` : '전부 올리기',
-    only.length ? only.join(', ') : '현재 변경사항 전체를 label 스냅샷으로 만듭니다.');
+    only.length ? only.join(', ') : '현재 변경사항 전체를 라벨 스냅샷으로 만듭니다.');
   if (!message) return;
   status('스냅샷 만드는 중…');
   try {
@@ -427,12 +567,12 @@ async function restoreFlow(id, assets) {
     return;
   }
   const n = rows(p.diff).length;
-  let html = `<h3>#${id} ${esc(p.snapshot.message || '(자동)')} 로 되돌리기 (${esc(scope)})</h3>
-    <div class="dim">${esc(p.snapshot.time)} · 현재 → #${id}: ${countsText(p.diff.counts)}</div>` + diffTable(p.diff, null);
+  let html = `<h3>#${id} ${esc(p.snapshot.message || '자동 저장')} 로 되돌리기 <span class="dim" style="font-weight:500">(${esc(scope)})</span></h3>
+    <div class="dim">${esc(p.snapshot.time)} · 현재 → #${id}</div><div class="bar" style="margin:8px 0">${pills(p.diff.counts)}</div>` + diffTable(p.diff, null);
   if (p.dependents.length) html += refList('롤백으로 사라지는 애셋을 참조', p.dependents);
   if (p.broken.length) html += refList('깨질 참조', p.broken);
-  if (n && !p.dependents.length && !p.broken.length) html += '<p class="ok">참조 검산: 이상 없음</p>';
-  html += '<div class="note">되돌리기 직전 안전 스냅샷이 자동 생성됩니다. 롤백도 그 스냅샷으로 다시 되돌릴 수 있습니다.</div>';
+  if (n && !p.dependents.length && !p.broken.length) html += '<p class="ok">✓ 참조 검산: 이상 없음</p>';
+  html += '<div class="note">🛡 되돌리기 직전 안전 스냅샷이 자동 생성됩니다. 롤백도 그 스냅샷으로 다시 되돌릴 수 있습니다.</div>';
   html += `<div id="restoreErr"></div><div class="btns"><button id="rcancel" class="ghost">취소</button><button id="rok" class="danger" ${n ? '' : 'disabled'}>${n ? `되돌리기 (${n}개 변경)` : '변경 없음'}</button></div>`;
   openModal(html);
   $('#rcancel').onclick = closeModal;
@@ -466,7 +606,7 @@ $('#mksnap').onclick = async () => {
     const r = await api('/api/snap', {method: 'POST', headers: JSONH, body: JSON.stringify({message})});
     $('#msg').value = '';
     await loadLog(); await loadStatus();
-    if (r.snapshot) { await select(r.snapshot.id); status(`#${r.snapshot.id} 생성 · ${countsText(r.diff.counts)} · 새 객체 ${r.stored}`); }
+    if (r.snapshot) { await select(r.snapshot.id); status(`#${r.snapshot.id} 생성 · ${countsText(r.diff.counts)} · 새 객체 ${r.stored}`); toast(`#${r.snapshot.id} 스냅샷 생성`); }
   } catch (e) { status('오류: ' + e.message); }
   finally { $('#mksnap').disabled = false; }
 };
@@ -475,7 +615,7 @@ $('#reload').onclick = () => { loadLog(); loadStatus(); };
 $('#reloadStatus').onclick = loadStatus;
 setInterval(loadStatus, 30000);
 
-// ---- URL 쿼리 (에디터 메뉴에서 열림): ?asset=<rel> → 최신 스냅샷의 그 애셋 히스토리, ?view=status → 변경사항 패널 강조 ----
+// ---- URL 쿼리 (에디터 메뉴에서 열림) ----
 async function openFromQuery() {
   const q = new URLSearchParams(location.search);
   const asset = q.get('asset'), view = q.get('view');
