@@ -123,3 +123,27 @@ def test_serve_mode_has_no_control(cfg) -> None:
         httpd.shutdown()
         httpd.server_close()
         t.join(timeout=3)
+
+
+# ---- 재시작 (실제 프로세스는 절대 띄우지 않는다: 가짜 launcher) ----
+def test_control_restart_spawns_and_stops(cfg) -> None:
+    c = daemonmod.DaemonControl(cfg, 4321)
+    seen = []
+
+    def fake_launcher(conf, port=None):
+        seen.append((conf.root, port))
+        return 9191
+
+    s = c.restart(launcher=fake_launcher)
+    assert seen == [(cfg.root, 4321)]
+    assert s["restarted_pid"] == 9191 and c.stopping is True
+    assert s["stopping"] is True          # 새 프로세스를 띄운 뒤 자신은 종료 요청 상태
+
+
+def test_relaunch_command_uses_module(cfg) -> None:
+    cmd = daemonmod.relaunch_command(cfg)
+    assert cmd[1:] == ["-m", "jokate", "daemon", str(cfg.root)] and cmd[0]
+
+
+def test_wait_port_free_returns_when_no_daemon(cfg) -> None:
+    assert daemonmod.wait_port_free(cfg, timeout=1.0, poll=0.05) is True

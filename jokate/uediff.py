@@ -17,6 +17,9 @@ import time
 from pathlib import Path
 
 TMP_SUBDIR = "tmp/diff"
+EDITOR_TMP_REL = "Saved/JokateDiff"        # 전략 1: 파일 경로로 직접 로드
+CONTENT_DIFF_DIR = "_JokateDiff"           # 전략 2: Content/_JokateDiff/<sha8>/<이름> (= /Game/_JokateDiff/...)
+DIFF_TIMEOUT = 60.0
 EXE_REL = "Engine/Binaries/Win64/UnrealEditor.exe"
 HINT = ("UnrealEditor.exe 를 찾지 못했습니다. "
         ".jokate/config.toml 의 [editor] exe 에 UnrealEditor.exe 경로를 적으세요")
@@ -107,20 +110,75 @@ def extract_version(store, rel: str, sha: str) -> Path:
     return out
 
 
-def cleanup_tmp(store, max_age_hours: float = 24) -> int:
-    """오래된 임시 추출 파일 삭제 → 지운 개수."""
-    d = tmp_dir(store)
-    if not d.exists():
-        return 0
-    cutoff = time.time() - max_age_hours * 3600
+def editor_tmp_dir(cfg) -> Path:
+    """<project>/Saved/JokateDiff — 에디터가 파일 경로로 직접 로드할 버전 복사본."""
+    return cfg.root / EDITOR_TMP_REL
+
+
+def content_diff_dir(cfg) -> Path:
+    """<project>/Content/_JokateDiff — /Game/_JokateDiff 로 로드할 버전 복사본."""
+    return cfg.content / CONTENT_DIFF_DIR
+
+
+def extract_for_editor(store, rel: str, sha: str) -> dict:
+    """버전을 두 곳(Saved/JokateDiff, Content/_JokateDiff)에 '원래 이름 그대로' 꺼낸다.
+
+    이름을 바꾸면 패키지 안의 애셋 이름과 어긋나 에디터가 로드하지 못한다.
+    → {file, content_file, package}
+    """
+    rel = str(rel).replace("\\", "/").strip("/")
+    sha = str(sha or "").strip().lower()
+    if not sha or any(c not in "0123456789abcdef" for c in sha):
+        raise ValueError("sha 는 16진수만")
+    src = store.object_path(sha)
+    if not src.exists():
+        raise KeyError(f"객체 없음: {sha[:8]}")
+    cfg = store.cfg
+    name = Path(rel).name or "asset"
+    stem = os.path.splitext(name)[0]
+    sub = sha[:8]
+    out = []
+    for base in (editor_tmp_dir(cfg), content_diff_dir(cfg)):
+        p = base / sub / name
+        if not (p.exists() and p.stat().st_size == src.stat().st_size):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, p)
+        out.append(p)
+    return {"file": out[0].as_posix(), "content_file": out[1].as_posix(),
+            "package": f"/Game/{CONTENT_DIFF_DIR}/{sub}/{stem}"}
+
+
+def _cleanup_dirs(root: Path, cutoff: float) -> int:
+    """<root>/<sha8>/ 중 오래된 폴더 삭제 → 지운 개수 (에디터가 잡고 있으면 조용히 건너뜀)."""
     n = 0
-    for p in d.iterdir():
+    if not root.is_dir():
+        return 0
+    for d in root.iterdir():
         try:
-            if p.is_file() and p.stat().st_mtime < cutoff:
-                p.unlink()
+            if d.is_dir() and d.stat().st_mtime < cutoff:
+                shutil.rmtree(d)
                 n += 1
         except OSError:
             pass
+    return n
+
+
+def cleanup_tmp(store, max_age_hours: float = 24) -> int:
+    """오래된 임시 추출물 삭제 → 지운 개수 (.jokate/tmp/diff 파일 + 에디터용 두 폴더의 하위 폴더)."""
+    cutoff = time.time() - max_age_hours * 3600
+    n = 0
+    d = tmp_dir(store)
+    if d.exists():
+        for p in d.iterdir():
+            try:
+                if p.is_file() and p.stat().st_mtime < cutoff:
+                    p.unlink()
+                    n += 1
+            except OSError:
+                pass
+    cfg = store.cfg
+    n += _cleanup_dirs(editor_tmp_dir(cfg), cutoff)
+    n += _cleanup_dirs(content_diff_dir(cfg), cutoff)
     return n
 
 
@@ -141,12 +199,69 @@ def launch(cmd: list[str]) -> int:
     return p.pid
 
 
-def open_diff(store, rel: str, a_sha: str, b_sha: str | None = None, launcher=None) -> dict:
-    """왼쪽=a_sha 버전, 오른쪽=b_sha 버전(없으면 작업 트리 현재 파일). → {pid,left,right,cmd}"""
+def _editor_is_running() -> bool:
+    from .store import editor_running
+    return editor_running()
+
+
+def open_in_editor(store, rel: str, a_sha: str, b_sha: str | None = None, bridge=None) -> dict:
+    """이미 켜져 있는 에디터에게 브릿지 op 'diff' 를 시켜 diff 창을 연다. → {mode:'editor', strategy}"""
+    if bridge is None:
+        from . import bridge as bridge  # noqa: PLW0127
+    cfg = store.cfg
+    left = extract_for_editor(store, rel, a_sha)
+    if b_sha:
+        right = extract_for_editor(store, rel, b_sha)
+        right_file, right_package = right["file"], right["package"]
+        right_label = str(b_sha)[:8]
+    else:
+        cur = cfg.content / rel
+        if not cur.is_file():
+            raise ValueError(f"작업 트리에 현재 파일이 없습니다: {rel}")
+        right_file = cur.as_posix()
+        right_package = "/Game/" + os.path.splitext(rel)[0]
+        right_label = "현재"
+    args = {"rel": rel,
+            "left_file": left["file"], "left_package": left["package"],
+            "right_file": right_file, "right_package": right_package,
+            "left_label": str(a_sha)[:8], "right_label": right_label}
+    resp = bridge.request(cfg, "diff", [], args, timeout=DIFF_TIMEOUT)
+    if not resp.get("ok"):
+        raise RuntimeError(str(resp.get("error") or "에디터 diff 실패"))
+    return {"mode": "editor", "strategy": resp.get("strategy"), "pid": None,
+            "left": left["file"], "right": right_file, "note": ""}
+
+
+def open_diff(store, rel: str, a_sha: str, b_sha: str | None = None, launcher=None,
+              bridge=None, editor_running=None) -> dict:
+    """왼쪽=a_sha, 오른쪽=b_sha(없으면 현재 파일).
+
+    에디터가 켜져 있고 브릿지가 살아 있으면 그 에디터 안에서 열고(mode='editor'),
+    아니면 예전처럼 새 에디터 프로세스를 띄운다(mode='process', note=사유).
+    """
     rel = str(rel).replace("\\", "/").strip("/")
     if not rel:
         raise ValueError("rel 필요")
     cfg = store.cfg
+    note = ""
+    if bridge is None:
+        from . import bridge as bridge  # noqa: PLW0127
+    running = editor_running or _editor_is_running
+    try:
+        alive = bool(running()) and bool(bridge.bridge_alive(cfg))
+    except Exception as e:  # noqa: BLE001
+        alive, note = False, f"에디터 상태 확인 실패: {type(e).__name__}: {e}"
+    if alive:
+        try:
+            r = open_in_editor(store, rel, a_sha, b_sha, bridge=bridge)
+            cleanup_tmp(store)
+            return r
+        except (KeyError, ValueError):
+            raise
+        except Exception as e:  # noqa: BLE001
+            note = f"에디터 브릿지로 열지 못해 새 에디터로 엽니다: {type(e).__name__}: {e}"
+    elif not note:
+        note = "에디터 브릿지가 없어 새 에디터로 엽니다"
     exe = find_editor_exe(cfg)
     if exe is None:
         raise EditorNotFound(HINT)
@@ -164,5 +279,6 @@ def open_diff(store, rel: str, a_sha: str, b_sha: str | None = None, launcher=No
     cleanup_tmp(store)
     cmd = build_command(exe, up, left, right)
     pid = (launcher or launch)(cmd)
-    return {"pid": pid, "left": str(left).replace("\\", "/"),
+    return {"mode": "process", "strategy": None, "note": note, "pid": pid,
+            "left": str(left).replace("\\", "/"),
             "right": str(right).replace("\\", "/"), "cmd": cmd}

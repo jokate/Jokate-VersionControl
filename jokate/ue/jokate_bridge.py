@@ -138,8 +138,80 @@ def _open_web(asset_rel=None, view=None):
     os.startfile(url)  # noqa: S606
 
 
+def _do_diff(base, rel):
+    """워커 스레드: HEAD 버전 sha 를 찾아 현재 파일과 비교 요청."""
+    code, j = _client.asset_versions(base, rel)
+    versions = (j or {}).get("versions") or []
+    if code != 200 or not versions:
+        _alert("Jokate diff", "이 애셋의 스냅샷 기록이 없습니다: %s" % rel)
+        return
+    code, j = _client.open_uediff(base, rel, versions[0].get("sha"))
+    j = j or {}
+    if code == 200 and j.get("ok"):
+        _report("log", "[jokate] diff 창 열기 (%s)" % (j.get("mode") or "?"))
+    else:
+        _alert("Jokate diff", "diff 열기 실패 %s: %s" % (code, j.get("error", j)))
+
+
+def _do_daemon_restart(base):
+    try:
+        code, j = _client.daemon_status(base, 2.0)
+    except _client.ConnectionError:
+        _report("log", "[jokate] 데몬 실행 pid=%s" % _launch.launch(_project_dir))
+        return
+    if code == 200 and (j or {}).get("running"):
+        code, j = _client.daemon_action(base, "restart")
+        _report("log", "[jokate] 데몬 재시작 요청 -> %s" % code)
+    else:
+        _report("log", "[jokate] 데몬 실행 pid=%s" % _launch.launch(_project_dir))
+
+
+def _do_snap_now(base):
+    code, j = _client.snap_now(base)
+    j = j or {}
+    if code == 200 and j.get("snapshot"):
+        _report("log", "[jokate] 스냅샷 #%s 생성" % j["snapshot"]["id"])
+    elif code == 200:
+        _alert("Jokate", "변경 없음 - 스냅샷을 만들지 않았습니다.", warn=False)
+    else:
+        _alert("Jokate", "스냅샷 실패 %s: %s" % (code, j.get("error", j)))
+
+
+def _do_state(base):
+    lines = ["브릿지: %s" % ("켜짐" if _tick_handle is not None else "꺼짐"), "서버 주소: %s" % base]
+    try:
+        code, j = _client.daemon_status(base, 2.0)
+        j = j or {}
+        lines.append("데몬: %s (응답 %s, 포트 %s)"
+                     % ("실행 중" if j.get("running") else "응답은 하지만 데몬 아님", code, j.get("port")))
+        if j.get("last_line"):
+            lines.append(j["last_line"])
+    except _client.ConnectionError:
+        lines.append("데몬: 응답 없음 - '데몬 시작 / 재시작' 을 눌러 보세요")
+    _alert("Jokate 상태", "\n".join(lines), warn=False)
+
+
 def _action(kind):
     base = _client.base_url(_project_dir)
+    if kind == "bridge_on":
+        start()
+        return
+    if kind == "bridge_off":
+        stop()
+        unreal.log("[jokate] 브릿지를 껐습니다 (툴 > Jokate > 브릿지 켜기 로 다시 켜기)")
+        return
+    if kind == "daemon_start":
+        _run_bg(_do_daemon_restart, base)
+        return
+    if kind == "timeline":
+        _open_web()
+        return
+    if kind == "snap_now":
+        _run_bg(_do_snap_now, base)
+        return
+    if kind == "state":
+        _run_bg(_do_state, base)
+        return
     sel = _selected()
     if kind == "status":
         _open_web(view="status")
@@ -157,13 +229,28 @@ def _action(kind):
         _run_bg(_do_preview, base, rels)
     elif kind == "history":
         _open_web(asset_rel=rels[0])
+    elif kind == "diff":
+        unreal.log("[jokate] diff 여는 중... %s" % rels[0])
+        _run_bg(_do_diff, base, rels[0])
 
 
 MENU_ITEMS = [
     ("snap", "선택한 애셋 올리기(스냅샷)", "선택한 애셋만 부분 스냅샷으로 올립니다"),
     ("restore", "선택한 애셋을 마지막 스냅샷 상태로 되돌리기", "무엇이 바뀌는지 확인창을 먼저 띄웁니다"),
     ("history", "히스토리 열기(웹)", "첫 번째 선택 애셋의 버전 히스토리를 브라우저로"),
+    ("diff", "직전 스냅샷과 비교(diff)", "첫 번째 선택 애셋의 마지막 스냅샷 버전과 현재 파일을 diff 창으로"),
     ("status", "현재 변경사항 보기(웹)", "HEAD 대비 올리지 않은 변경"),
+]
+
+# 에디터 상단 '툴(Tools)' 메뉴의 Jokate 섹션
+TOOLS_MENU = "LevelEditor.MainMenu.Tools"
+TOOLS_ITEMS = [
+    ("bridge_on", "브릿지 켜기", "에디터 브릿지(틱/heartbeat)를 켭니다"),
+    ("bridge_off", "브릿지 끄기", "에디터 브릿지를 끕니다 (되돌리기/diff 연동 중단)"),
+    ("daemon_start", "데몬 시작 / 재시작", "jokate 데몬을 띄우거나 최신 코드로 재시작합니다"),
+    ("timeline", "타임라인 열기(웹)", "브라우저로 타임라인을 엽니다"),
+    ("snap_now", "지금 스냅샷", "지금 상태를 스냅샷으로 올립니다"),
+    ("state", "상태 보기", "브릿지/데몬/포트 상태를 창으로 보여줍니다"),
 ]
 
 
@@ -198,9 +285,24 @@ def _register_menu():
                      "Jokate_%s" % kind, label, tip)
         e.register_menu_entry()
         _entries.append(e)
+    _register_tools_menu(menus)
     menus.refresh_all_widgets()
     _menu_registered = True
-    unreal.log("[jokate] 콘텐츠 브라우저 메뉴 등록")
+    unreal.log("[jokate] 콘텐츠 브라우저 / 툴 메뉴 등록")
+
+
+def _register_tools_menu(menus):
+    """에디터 상단 '툴(Tools)' 에 Jokate 섹션을 붙인다 (브릿지가 꺼져 있어도 항상 등록)."""
+    menu = menus.extend_menu(TOOLS_MENU)
+    if menu is None:
+        unreal.log_warning("[jokate] %s 를 찾지 못함 - 툴 메뉴 미등록" % TOOLS_MENU)
+        return
+    menu.add_section("Jokate", "Jokate")
+    for kind, label, tip in TOOLS_ITEMS:
+        e = JokateMenuEntry()
+        e.init_entry(TOOLS_MENU, TOOLS_MENU, "Jokate", "Jokate_%s" % kind, label, tip)
+        e.register_menu_entry()
+        _entries.append(e)
 
 
 def _write_json(path, data):
@@ -345,7 +447,80 @@ def _op_export_meta(packages, args):
     return {"ok": True, "meta": meta, "skipped": skipped, "errors": errors}
 
 
-_OPS = {"dirty": _op_dirty, "reload": _op_reload, "export_meta": _op_export_meta}
+# ---- op 'diff' : 이미 켜져 있는 에디터에서 diff 창 열기 ----
+def _asset_from_file(path):
+    """전략 1 - 파일 경로로 패키지를 직접 로드하고 그 안의 애셋 객체를 얻는다. 실패하면 None."""
+    if not path or not os.path.exists(path):
+        return None
+    name = os.path.splitext(os.path.basename(path))[0]
+    pkg = unreal.load_package(path)
+    if pkg is None:
+        return None
+    for getter in (lambda: unreal.load_object(pkg, name),
+                   lambda: unreal.find_object(pkg, name)):
+        try:
+            obj = getter()
+        except Exception:  # noqa: BLE001
+            obj = None
+        if obj is not None:
+            return obj
+    return None
+
+
+def _asset_from_package(pkg_path):
+    """전략 2 - /Game/... 패키지 경로로 로드 (애셋 레지스트리에 폴더를 먼저 스캔)."""
+    if not pkg_path:
+        return None
+    folder = pkg_path.rsplit("/", 1)[0]
+    try:
+        ar = unreal.AssetRegistryHelpers.get_asset_registry()
+        ar.scan_paths_synchronous([folder], True)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return unreal.EditorAssetLibrary.load_asset(pkg_path)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _revision_info(label):
+    """unreal.RevisionInfo - revision 에 라벨을 넣되, 실패하면 기본값 그대로."""
+    rev = unreal.RevisionInfo()
+    try:
+        rev.set_editor_property("revision", str(label or ""))
+    except Exception:  # noqa: BLE001
+        pass
+    return rev
+
+
+def _op_diff(packages, args):
+    """args {left_file, left_package, right_file, right_package, left_label, right_label, rel}"""
+    left = _asset_from_file(args.get("left_file"))
+    strategy = "file" if left is not None else ""
+    if left is None:
+        left = _asset_from_package(args.get("left_package"))
+        strategy = "package" if left is not None else ""
+    if left is None:
+        return {"ok": False, "error": "왼쪽(과거) 버전을 로드하지 못했습니다", "strategy": ""}
+
+    right = None
+    rp = args.get("right_package") or ""
+    if rp and "/_JokateDiff/" not in rp:
+        right = _asset_from_package(rp)          # 오른쪽 = 작업 트리의 현재 애셋
+    if right is None:
+        right = _asset_from_file(args.get("right_file"))
+    if right is None and rp:
+        right = _asset_from_package(rp)
+    if right is None:
+        return {"ok": False, "error": "오른쪽 버전을 로드하지 못했습니다", "strategy": strategy}
+
+    tools = unreal.AssetToolsHelpers.get_asset_tools()
+    tools.diff_assets(left, right, _revision_info(args.get("left_label")),
+                      _revision_info(args.get("right_label")))
+    return {"ok": True, "strategy": strategy}
+
+
+_OPS = {"dirty": _op_dirty, "reload": _op_reload, "export_meta": _op_export_meta, "diff": _op_diff}
 
 
 def _handle_request():
@@ -465,15 +640,20 @@ def _autostart_check():
 
 
 def start():
+    """브릿지 틱 등록 + 데몬 자동 실행 확인 (메뉴는 install_menus 가 항상 등록한다)."""
     global _tick_handle
     stop()
+    install_menus()
     _tick_handle = unreal.register_slate_post_tick_callback(_tick)
+    _run_bg(_autostart_check)
+    unreal.log("[jokate] bridge started: %s" % BRIDGE_DIR)
+
+
+def install_menus():
     try:
         _register_menu()
     except Exception:  # noqa: BLE001
         unreal.log_warning("[jokate] 메뉴 등록 실패:\n" + traceback.format_exc())
-    _run_bg(_autostart_check)
-    unreal.log("[jokate] bridge started: %s" % BRIDGE_DIR)
 
 
 def stop():
@@ -486,4 +666,9 @@ def stop():
         _tick_handle = None
 
 
-start()
+# 메뉴는 항상 등록하고, 브릿지 틱은 tool.json 의 autostart 에 따라 (false 면 툴 메뉴에서 켠다)
+install_menus()
+if _launch.autostart_enabled(_launch.read_tool(_project_dir)):
+    start()
+else:
+    unreal.log("[jokate] autostart=false - 브릿지 꺼짐. 툴 > Jokate > 브릿지 켜기")

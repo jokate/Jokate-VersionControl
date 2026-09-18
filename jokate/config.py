@@ -20,6 +20,8 @@ from pathlib import Path
 
 STATE_DIR = ".jokate"
 ASSET_EXTS = {".uasset", ".umap"}
+# 에디터 안에서 diff 를 열 때 과거 버전을 잠시 놓아두는 Content 하위 폴더 (절대 추적하지 않는다)
+DIFF_DIR = "_JokateDiff"
 
 DEFAULT_CONFIG = """[project]
 content = "Content"
@@ -73,6 +75,8 @@ class Config:
     def tier_of(self, rel: Path) -> str | None:
         """Content 기준 상대경로 → 'vendor' | 'authored' | None(무시)."""
         top = rel.parts[0] if len(rel.parts) > 1 else ""
+        if top == DIFF_DIR:          # diff 용 임시 복사본 — 설정과 무관하게 절대 추적하지 않는다
+            return None
         for pat in self.ignore:
             if fnmatch.fnmatch(top, pat):
                 return None

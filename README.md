@@ -116,7 +116,7 @@ python -m jokate <명령> <project> [옵션]
 | `log` | 스냅샷 목록 |
 | `show` | 스냅샷 하나의 A/M/R/D |
 | `restore` | 롤백 (`--asset`, `--apply`, `--discard-dirty`. 기본 드라이런) |
-| `uediff` | 두 버전을 UE diff 창으로 열기 (`<rel> <id_a> [id_b]`) |
+| `uediff` | 두 버전을 UE diff 창으로 열기 (`<rel> <id_a> [id_b]`). 에디터가 켜져 있으면 그 에디터 안에서 바로 연다 |
 | `squash` | `<from_id> <to_id>` 사슬을 하나로 묶기 (`-m`, `--include-labels`) |
 | `prune` | 오래된 auto 스냅샷 정리 (`--days`, `--keep`, `--dry-run`) |
 | `gc` | 참조 없는 객체 파일 삭제 (`--dry-run`) |

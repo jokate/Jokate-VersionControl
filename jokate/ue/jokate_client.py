@@ -96,6 +96,29 @@ def status(base):
     return j
 
 
+def asset_versions(base, rel):
+    """GET /api/asset?rel=<rel> → (code, json). 최신순 버전 목록."""
+    from urllib.parse import urlencode
+    return _call(base, "/api/asset?" + urlencode({"rel": rel}))
+
+
+def open_uediff(base, rel, a, b=None):
+    """POST /api/uediff → (code, json). b 가 없으면 오른쪽은 현재 파일."""
+    body = {"rel": rel, "a": a}
+    if b:
+        body["b"] = b
+    return _call(base, "/api/uediff", body)
+
+
+def daemon_action(base, action, timeout=10.0):
+    """POST /api/daemon {action} → (code, json)."""
+    return _call(base, "/api/daemon", {"action": action}, timeout=timeout)
+
+
+def snap_now(base, message="에디터에서 수동 스냅샷"):
+    return _call(base, "/api/snap", {"message": message})
+
+
 def snap_only(base, message, rels):
     return _call(base, "/api/snap", {"message": message, "only": list(rels)})
 

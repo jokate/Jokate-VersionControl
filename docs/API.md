@@ -7,7 +7,7 @@
 | 메서드·경로 | 요청 | 응답 | 오류 |
 |---|---|---|---|
 | `GET /` | — | `web_static/index.html` | 404 |
-| `GET /api/info` | — | 프로젝트명, 스냅샷 수, HEAD 추적 애셋 수, 객체 수·용량, 마지막 스냅샷 | — |
+| `GET /api/info` | — | 프로젝트명, 스냅샷 수, HEAD 추적 애셋 수, 객체 수·용량, 마지막 스냅샷 + `build`(서버 시작 시 코드 해시)·`build_disk`(현재 디스크, 5초 캐시)·`stale`(둘이 다름) | — |
 | `GET /api/log` | — | 스냅샷 목록 + 변경 건수·클래스별 집계 | — |
 | `GET /api/snap/<id>` | 경로 id | `show` 와 동일한 diff (A/M/R/D + `by_class` + `all_noise`) | 404 없는 id |
 | `GET /api/asset` | `rel` | 애셋 버전 히스토리(스냅샷별 sha·size·변경여부, 최신순) | 400 `rel` 없음 |
@@ -24,11 +24,11 @@
 
 | 메서드·경로 | 요청 | 응답 | 오류 |
 |---|---|---|---|
-| `POST /api/daemon` | `{action: "pause"\|"resume"\|"stop"}` | 갱신된 데몬 상태 | 409 데몬 모드가 아님(`serve` 단독) |
+| `POST /api/daemon` | `{action: "pause"\|"resume"\|"stop"\|"restart"}` | 갱신된 데몬 상태(`restart` 는 `restarted_pid` 포함 — 새 데몬을 띄우고 자신은 종료) | 409 데몬 모드가 아님(`serve` 단독) |
 | `POST /api/snap` | `{message, only?:[rel]}` | 만들어진 label 스냅샷(`only` 면 부분 스냅샷) | 400 `message` 없음·`only` 형식 |
 | `POST /api/restore/<id>` | `{assets?:[rel], discard_dirty?:bool}` | `{ok:true, safety, result, written, deleted, safety_created}` | 409 dirty·브릿지 없음 `{ok:false, error, dirty:[...]}`, 409 객체 유실, 500 그 외 |
 | `POST /api/squash` | `{ids:[id], message, include_labels?}` | 남은 스냅샷 | 400 연속 사슬 아님, 409 사라질 쪽에 라벨 `{labels}` |
-| `POST /api/uediff` | `{rel, a, b?}` | 실행 결과(`b` 없으면 현재 파일과 비교) | 400 `rel`/`a` 없음, 409 에디터 못 찾음 `{ok:false, error}` |
+| `POST /api/uediff` | `{rel, a, b?}` | `{ok, mode:"editor"\|"process", strategy, note, pid, left, right}` — 에디터가 켜져 있으면 그 에디터에서 diff 창을 열고, 아니면 새 에디터 프로세스(`b` 없으면 현재 파일과 비교) | 400 `rel`/`a` 없음, 409 에디터 못 찾음 `{ok:false, error}` |
 | `POST /api/prune` | `{dry_run:bool}` | `{ids, objects, bytes}` (정리 + GC) | — |
 
 오류 응답은 공통으로 `{ok:false, error:"..."}` 형태이며, `ValueError` 계열은 400, 없는 경로·대상은 404, 진행이 막힌 경우(`RestoreBlocked`, `SquashHasLabels`, 객체 유실, 데몬 아님)는 409, 나머지는 500 이다.

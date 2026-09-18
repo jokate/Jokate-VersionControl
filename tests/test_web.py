@@ -216,3 +216,41 @@ def test_api_restore_apply_blocked(st: storemod.Store, monkeypatch: pytest.Monke
     assert web.error_response(RuntimeError("x"))[0] == 500
     code, body = web.error_response(FileNotFoundError("객체 없음: Foo/A.uasset (abc)"))
     assert code == 409 and body["ok"] is False and "객체 없음" in body["error"]
+
+
+# ---- 빌드 식별자 / 낡은 서버 감지 ----
+def test_build_id_changes_with_mtime(tmp_path: Path) -> None:
+    base = tmp_path / "pkg"
+    (base / "web_static").mkdir(parents=True)
+    (base / "a.py").write_text("x = 1", encoding="utf-8")
+    (base / "web_static" / "index.html").write_text("<html>", encoding="utf-8")
+    first = web.compute_build_id(base)
+    assert first == web.compute_build_id(base)
+    os.utime(base / "web_static" / "index.html", (12345, 12345))
+    assert web.compute_build_id(base) != first
+    (base / "a.py").write_text("x = 22", encoding="utf-8")
+    assert len(web.compute_build_id(base)) == 10
+
+
+def test_api_info_build_and_stale(st: storemod.Store, monkeypatch) -> None:
+    web._build_cache["ts"] = 0.0
+    i = web.api_info(st)
+    assert i["build"] == web.BUILD_ID and i["build_disk"] == i["build"] and i["stale"] is False
+    monkeypatch.setattr(web, "BUILD_ID", "0000000000")   # 서버가 낡은 코드로 떠 있는 상황
+    web._build_cache["ts"] = 0.0
+    i = web.api_info(st)
+    assert i["stale"] is True and i["build"] == "0000000000" and i["build_disk"] != "0000000000"
+
+
+def test_api_daemon_post_restart() -> None:
+    calls = []
+
+    class C:
+        def restart(self):
+            calls.append("restart")
+            return {"running": True, "restarted_pid": 777}
+
+    assert web.api_daemon_post(C(), "restart")["restarted_pid"] == 777
+    assert calls == ["restart"]
+    with pytest.raises(web.DaemonUnavailable):
+        web.api_daemon_post(None, "restart")

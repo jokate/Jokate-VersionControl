@@ -95,9 +95,22 @@ HTTP 는 항상 `threading.Thread` 에서 보내고 결과는 큐에 넣어 기�
 
 ## uediff 의 에디터 탐색
 
-- 두 버전을 `<project>/.jokate/tmp/diff/<이름>__<sha8>.<확장자>` 로 꺼낸 뒤 `UnrealEditor.exe <프로젝트.uproject> -diff <왼쪽> <오른쪽>` 을 창 분리로 실행한다. 임시 파일은 24시간 뒤 정리
+- **에디터가 켜져 있으면 그 에디터 안에서 연다**(새 에디터를 띄우면 1분쯤 걸리므로). `store.editor_running()` + `bridge.bridge_alive()` 가 참이면 버전 파일을 `<project>/Saved/JokateDiff/<sha8>/<원래이름>`(전략 1: 파일 경로로 `load_package`)과 `<project>/Content/_JokateDiff/<sha8>/<원래이름>`(전략 2: `/Game/_JokateDiff/<sha8>/<이름>` 로 `load_asset`) 두 곳에 꺼내고 브릿지 op `diff`(타임아웃 60초)를 보낸다. 에디터 쪽은 `AssetToolsHelpers.get_asset_tools().diff_assets(old, new, RevisionInfo, RevisionInfo)` 를 게임 스레드에서 호출하고 성공한 전략(`file`/`package`)을 돌려준다 → `{mode:"editor", strategy}`
+- 파일 이름은 반드시 원래 이름을 유지한다(바꾸면 패키지 안 애셋 이름과 어긋나 로드 실패). `_JokateDiff` 최상위 폴더는 `Config.tier_of` 가 설정과 무관하게 `None`(무시) 로 판정해 절대 추적되지 않는다. 두 임시 폴더는 24시간 뒤(데몬 시작 시 `cleanup_tmp`) 정리한다
+- 브릿지가 없거나 op 가 실패하면 예전 경로로 폴백: 두 버전을 `<project>/.jokate/tmp/diff/<이름>__<sha8>.<확장자>` 로 꺼낸 뒤 `UnrealEditor.exe <프로젝트.uproject> -diff <왼쪽> <오른쪽>` 을 창 분리로 실행한다. 임시 파일은 24시간 뒤 정리
 - 에디터 경로: ① `[editor] exe` ② `.uproject` 의 `EngineAssociation` — 버전(`5.7`)이면 `HKLM\SOFTWARE\EpicGames\Unreal Engine\<버전>` 의 `InstalledDirectory`, GUID(소스 빌드)면 `HKCU\Software\Epic Games\Unreal Engine\Builds`
 - 못 찾으면 웹은 409 로 안내한다
+
+## 낡은 서버 감지와 재시작
+
+- `web.BUILD_ID` = 서버가 뜰 때 계산한 `jokate/*.py` + `web_static/*` 의 (상대경로, mtime, size) 해시(10자). `GET /api/info` 가 `build`(시작 시) · `build_disk`(요청 시 다시 계산, 5초 캐시) · `stale` 을 준다
+- UI 는 `stale` 이거나 어떤 API 가 404 이면서 `error` 가 요청 경로와 같으면(라우트 자체가 없음 = 낡은 서버) 상단 배너를 띄운다. '지금 재시작' → `POST /api/daemon {action:"restart"}` → 1초 간격으로 `/api/info` 를 폴링해 `build` 가 바뀌면 새로고침
+- `DaemonControl.restart()` 는 `spawn_daemon()` 으로 같은 인자의 데몬을 DETACHED 로 띄우고(`PYTHON*` 환경변수 제거, `JOKATE_WAIT_PORT=1`) 자신은 `stop()`. 새 프로세스는 `JOKATE_WAIT_PORT=1` 을 보면 이전 데몬이 물러날 때까지 최대 15초 기다린 뒤 뜬다. `serve` 단독 모드에는 컨트롤이 없어 409 → UI 가 'start.bat 을 다시 실행하세요' 로 안내
+
+## 에디터 툴 메뉴
+
+- 상단 **툴(Tools) > Jokate**: 브릿지 켜기/끄기, 데몬 시작·재시작, 타임라인 열기(웹), 지금 스냅샷, 상태 보기. 메뉴 등록은 `init_unreal.py` 의 `import jokate_bridge` 에서 항상 수행하고, 브릿지 틱은 `tool.json` 의 `autostart` 에 따른다(false 면 메뉴에서 켠다)
+- 콘텐츠 브라우저 우클릭 **Jokate** 에는 '직전 스냅샷과 비교(diff)' 가 추가됐다(HEAD 버전 ↔ 현재 파일). 모든 HTTP 는 워커 스레드, 모달은 틱에서만
 
 ## UE 패키지 헤더 포맷 메모
 

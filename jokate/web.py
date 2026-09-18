@@ -14,7 +14,8 @@ JSON API
   GET  /api/restore/<id>?asset=<rel> plan_restore 드라이런 (diff + broken + dependents). 적용 없음
   GET  /api/status                   HEAD 대비 아직 올리지 않은 변경 {diff}
   GET  /api/daemon                   {running, paused, pid, port, started, last_line}
-  POST /api/daemon {action}          pause|resume|stop (데몬 모드가 아니면 409)
+  POST /api/daemon {action}          pause|resume|stop|restart (데몬 모드가 아니면 409)
+  GET  /api/info                     요약 + build/build_disk/stale (낡은 서버 감지)
   POST /api/snap  {message, only?:[rel]}   label 스냅샷 (only 있으면 부분 스냅샷)
   POST /api/restore/<id> {assets?:[rel], discard_dirty?:bool}  롤백 적용. 중단(dirty·브릿지) → 409 {ok:false,error,dirty}
   POST /api/squash {ids:[id], message, include_labels}
@@ -28,9 +29,12 @@ JSON API
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -45,6 +49,37 @@ from .uasset import read_package
 _HEX = re.compile(r"[0-9a-fA-F]+")
 
 STATIC = Path(__file__).parent / "web_static"
+
+
+# ---- 빌드 식별자 (낡은 서버 감지) ----
+def compute_build_id(base: Path | None = None) -> str:
+    """jokate/*.py 와 web_static/* 의 (상대경로, mtime, size) 해시 → 짧은 문자열."""
+    base = Path(base) if base is not None else Path(__file__).resolve().parent
+    parts: list[str] = []
+    files = sorted(base.glob("*.py")) + sorted((base / "web_static").glob("*"))
+    for p in files:
+        try:
+            stt = p.stat()
+        except OSError:
+            continue
+        if not p.is_file():
+            continue
+        parts.append(f"{p.relative_to(base).as_posix()}:{stt.st_mtime_ns}:{stt.st_size}")
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:10]
+
+
+BUILD_ID = compute_build_id()          # 서버가 시작될 때의 코드 상태
+BUILD_CACHE_TTL = 5.0
+_build_cache = {"ts": 0.0, "id": BUILD_ID}
+
+
+def current_build(now: float | None = None) -> str:
+    """디스크의 현재 코드 상태 (5초 캐시)."""
+    t = time.time() if now is None else now
+    if t - _build_cache["ts"] >= BUILD_CACHE_TTL:
+        _build_cache["id"] = compute_build_id()
+        _build_cache["ts"] = t
+    return str(_build_cache["id"])
 
 
 # ---- 직렬화 ----
@@ -88,8 +123,10 @@ def api_info(store: Store) -> dict:
             if p.is_file() and not p.suffix:
                 objects += 1
                 size += p.stat().st_size
+    disk = current_build()
     return {"project": store.cfg.root.name, "snapshots": n_snaps, "assets": n_assets,
-            "objects": objects, "store_bytes": size, "last": _snapshot(head) if head else None}
+            "objects": objects, "store_bytes": size, "last": _snapshot(head) if head else None,
+            "build": BUILD_ID, "build_disk": disk, "stale": disk != BUILD_ID}
 
 
 def api_log(store: Store) -> list[dict]:
@@ -264,7 +301,8 @@ def api_uediff(store: Store, rel: str, a_sha: str, b_sha: str | None = None, lau
     EditorNotFound(→409) / KeyError(객체 없음 →404) / ValueError(→400) 는 호출자가 처리.
     """
     r = uediffmod.open_diff(store, rel, a_sha, b_sha or None, launcher=launcher)
-    return {"ok": True, "pid": r["pid"], "left": r["left"], "right": r["right"]}
+    return {"ok": True, "mode": r.get("mode", "process"), "strategy": r.get("strategy"),
+            "note": r.get("note", ""), "pid": r["pid"], "left": r["left"], "right": r["right"]}
 
 
 class DaemonUnavailable(Exception):
@@ -280,7 +318,7 @@ def api_daemon_get(control=None) -> dict:
 
 
 def api_daemon_post(control, action: str) -> dict:
-    """action: pause | resume | stop. control 이 없으면 DaemonUnavailable(409)."""
+    """action: pause | resume | stop | restart. control 이 없으면 DaemonUnavailable(409)."""
     if control is None:
         raise DaemonUnavailable("데몬 모드가 아닙니다 (serve 단독)")
     if action == "pause":
@@ -289,6 +327,8 @@ def api_daemon_post(control, action: str) -> dict:
         return control.resume()
     if action == "stop":
         return control.stop()
+    if action == "restart":
+        return control.restart()
     raise ValueError(f"알 수 없는 action: {action}")
 
 

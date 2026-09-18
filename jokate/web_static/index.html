@@ -33,6 +33,9 @@
   input:focus { border-color:var(--acc); box-shadow:0 0 0 3px rgba(108,140,255,.2); }
 
   /* ---------- 헤더 ---------- */
+  #staleBar { display:none; align-items:center; gap:10px; padding:8px 20px; font-size:13px; font-weight:600;
+              color:var(--m); background:rgba(255,181,71,.14); border-bottom:1px solid var(--line2); }
+  #staleBar.show { display:flex; }
   header { display:flex; align-items:center; flex-wrap:wrap; row-gap:8px; gap:12px; padding:12px 20px; border-bottom:1px solid var(--line); background:rgba(15,19,27,.75); backdrop-filter:blur(10px); position:sticky; top:0; z-index:20; }
   .logo { display:flex; align-items:center; gap:10px; margin-right:8px; }
   .logo .mark { width:30px; height:30px; border-radius:9px; background:var(--accg); display:grid; place-items:center; font-weight:800; color:#0b0e14; box-shadow:0 6px 16px -4px rgba(63,210,255,.6); }
@@ -245,6 +248,10 @@
 </style>
 </head>
 <body>
+<div id="staleBar">
+  <span>서버가 최신 코드보다 오래됐습니다 — 재시작이 필요합니다</span>
+  <button class="ghost small" id="staleRestart">지금 재시작</button>
+</div>
 <header>
   <div class="logo"><div class="mark">J</div><h1>Jokate</h1><span class="proj" id="proj">…</span></div>
   <input id="msg" placeholder="스냅샷 메시지 — 예: 대시 공격 몽타주 연결" maxlength="200">
@@ -298,8 +305,33 @@ const relHtml = rel => { const i = rel.lastIndexOf('/'); return i < 0 ? `<span c
 async function api(path, opt) {
   const r = await fetch(path, opt);
   const j = await r.json().catch(() => ({error: r.statusText}));
-  if (!r.ok) { const e = new Error(j.error || String(r.status)); e.status = r.status; e.body = j; throw e; }
+  if (!r.ok) {
+    const e = new Error(j.error || String(r.status)); e.status = r.status; e.body = j;
+    if (r.status === 404 && j.error === String(path).split('?')[0]) showStale();  // 라우트 자체가 없음 = 낡은 서버
+    throw e;
+  }
   return j;
+}
+// ---- 낡은 서버 감지 / 재시작 ----
+let buildId = null;
+function showStale() { $('#staleBar').classList.add('show'); }
+async function restartServer() {
+  try {
+    await api('/api/daemon', {method: 'POST', headers: JSONH, body: JSON.stringify({action: 'restart'})});
+  } catch (e) {
+    toast('재시작할 수 없습니다 — start.bat 을 다시 실행하세요 (열려 있는 jokate 콘솔 창은 닫기)', true);
+    return;
+  }
+  toast('서버를 재시작하는 중…');
+  let n = 0;
+  const t = setInterval(async () => {
+    n += 1;
+    try {
+      const i = await api('/api/info');
+      if (buildId && i.build && i.build !== buildId) { clearInterval(t); location.reload(); }
+    } catch (e) { /* 재시작 중에는 연결이 끊긴다 */ }
+    if (n > 30) clearInterval(t);
+  }, 1000);
 }
 function toast(msg, bad, action) {
   const d = document.createElement('div'); if (bad) d.className = 'bad';
@@ -345,6 +377,8 @@ async function loadInfo() {
   try {
     const i = await api('/api/info');
     $('#proj').textContent = i.project;
+    if (buildId === null) buildId = i.build;
+    if (i.stale) showStale();
     $('#stSnaps').textContent = i.snapshots;
     $('#stAssets').innerHTML = `${i.assets}<small>authored</small>`;
     $('#stStore').innerHTML = `${fmtB(i.store_bytes)}<small>${i.objects}개</small>`;
@@ -823,10 +857,12 @@ async function showHistory(rel, tr, snapDiff) {
 
 // ---- UE diff ----
 async function uediffFlow(rel, aSha, bSha) {
-  toast('언리얼 diff 창을 여는 중 — 에디터가 하나 더 뜨며 1분쯤 걸릴 수 있습니다');
+  toast('언리얼 diff 창을 여는 중…');
   const body = bSha ? {rel, a: aSha, b: bSha} : {rel, a: aSha};
   try {
-    await api('/api/uediff', {method: 'POST', headers: JSONH, body: JSON.stringify(body)});
+    const r = await api('/api/uediff', {method: 'POST', headers: JSONH, body: JSON.stringify(body)});
+    toast(r.mode === 'editor' ? '에디터에서 diff 창을 열었습니다'
+      : '에디터가 꺼져 있어 새 에디터로 엽니다 — 1분쯤 걸릴 수 있습니다');
   } catch (e) {
     if (e.status === 409)
       openModal(`<h3>언리얼 에디터를 찾지 못했습니다</h3><div class="err">${esc(e.message)}</div>` +
@@ -961,6 +997,7 @@ $('#dchip').onclick = async () => {
     toast(daemon.paused ? '자동 스냅샷 일시정지' : '자동 스냅샷 재개');
   } catch (e) { toast('오류: ' + e.message, true); }
 };
+$('#staleRestart').onclick = () => restartServer();
 $('#dstop').onclick = async () => {
   if (!confirm('자동 스냅샷과 웹 서버를 종료할까요?')) return;
   try { await api('/api/daemon', {method: 'POST', headers: JSONH, body: JSON.stringify({action: 'stop'})}); }

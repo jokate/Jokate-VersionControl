@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -20,6 +21,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+from . import uediff as uediffmod
 from . import watch as watchmod
 from . import web as webmod
 from .config import Config
@@ -162,6 +164,14 @@ class DaemonControl:
             self.log(f"{format_ts(time.time())}  종료 요청")
         return self.status()
 
+    def restart(self, launcher=None) -> dict:
+        """새 데몬 프로세스를 띄우고 자신은 종료한다 (코드 업데이트 후 낡은 서버 교체용)."""
+        pid = (launcher or spawn_daemon)(self.cfg, self.port)
+        self.log(f"{format_ts(time.time())}  재시작: 새 데몬 pid={pid}")
+        s = self.stop()
+        s["restarted_pid"] = pid
+        return s
+
     def snap_now(self) -> dict:
         """수동 스냅샷 요청. 실제 스냅은 watch 루프 스레드가 찍는다(sqlite 스레드 고정)."""
         self._snap_req.set()
@@ -271,8 +281,52 @@ def watch_loop(cfg: Config, control: DaemonControl, interval: float = 2.0, debou
         st.close()
 
 
+# ---- 재시작 ----
+WAIT_PORT_ENV = "JOKATE_WAIT_PORT"
+TOOL_DIR = Path(__file__).resolve().parent.parent
+
+
+def relaunch_command(cfg: Config) -> list[str]:
+    """[pythonw 또는 python, '-m', 'jokate', 'daemon', <project>] — tool.json 의 인터프리터 우선."""
+    exe = sys.executable
+    tool = {}
+    try:
+        tool = json.loads((cfg.state_dir / "tool.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        tool = {}
+    exe = tool.get("pythonw") or tool.get("python") or str(Path(exe).with_name("pythonw.exe")
+                                                          if Path(exe).with_name("pythonw.exe").exists() else exe)
+    return [str(exe), "-m", "jokate", "daemon", str(cfg.root)]
+
+
+def spawn_daemon(cfg: Config, port: int | None = None) -> int:
+    """같은 인자로 새 데몬을 분리 실행 (PYTHON* 환경변수 제거, 포트가 빌 때까지 기다리게 표시)."""
+    env = {k: v for k, v in os.environ.items() if not str(k).upper().startswith("PYTHON")}
+    env[WAIT_PORT_ENV] = "1"
+    kwargs = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000   # DETACHED|NEW_GROUP|NO_WINDOW
+    p = subprocess.Popen(  # noqa: S603
+        relaunch_command(cfg), cwd=str(TOOL_DIR), env=env,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        close_fds=True, **kwargs)
+    return p.pid
+
+
+def wait_port_free(cfg: Config, timeout: float = 15.0, poll: float = 0.4) -> bool:
+    """앞선 데몬이 물러날 때까지 대기 (JOKATE_WAIT_PORT=1 로 뜬 프로세스 전용)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if running_state(cfg) is None:
+            return True
+        time.sleep(poll)
+    return running_state(cfg) is None
+
+
 def run(cfg: Config, port: int | None = None, interval: float = 2.0, debounce: float = 5.0,
         *, host: str = "127.0.0.1") -> int:
+    if os.environ.get(WAIT_PORT_ENV, "") == "1":
+        wait_port_free(cfg)          # 재시작으로 뜬 프로세스: 이전 데몬이 포트를 놓을 때까지
     cur = running_state(cfg)
     if cur:
         write_log(cfg, f"{format_ts(time.time())}  이미 실행 중: pid {cur.get('pid')} port {cur.get('port')}")
@@ -285,6 +339,14 @@ def run(cfg: Config, port: int | None = None, interval: float = 2.0, debounce: f
     control.log(f"{format_ts(time.time())}  daemon 시작  pid={control.pid} port={control.port} "
                 f"http://{host}:{control.port}/")
 
+    try:
+        _st = Store(cfg)
+        try:
+            uediffmod.cleanup_tmp(_st)      # 지난 diff 임시 복사본 정리
+        finally:
+            _st.close()
+    except Exception:  # noqa: BLE001
+        pass
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     t_watch = threading.Thread(target=watch_loop, args=(cfg, control, interval, debounce), daemon=True)
     t_watch.start()

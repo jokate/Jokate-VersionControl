@@ -181,3 +181,110 @@ def test_api_uediff_bad_sha_and_missing_object(st: storemod.Store, tmp_path: Pat
         web.api_uediff(st, "Foo/A.uasset", "ab" * 20, None, launcher=lambda cmd: 0)
     assert web.error_response(ei.value)[0] == 404
     assert a
+
+
+# ---- 에디터 안에서 열기 (in-editor) ----
+class FakeBridge:
+    """jokate.bridge 대역 — 실제 에디터 없이 op 'diff' 왕복을 흉내낸다."""
+
+    def __init__(self, alive=True, resp=None, exc=None):
+        self.alive = alive
+        self.resp = resp or {"ok": True, "strategy": "file"}
+        self.exc = exc
+        self.calls = []
+
+    def bridge_alive(self, cfg, *a, **k):
+        return self.alive
+
+    def request(self, cfg, op, packages, args=None, timeout=30.0, poll=0.2):
+        self.calls.append((op, dict(args or {}), timeout))
+        if self.exc is not None:
+            raise self.exc
+        return self.resp
+
+
+def test_open_diff_in_editor(st: storemod.Store, tmp_path: Path) -> None:
+    st.cfg.editor_exe = str(fake_exe(tmp_path))
+    a, _ = shas(st)
+    br = FakeBridge()
+    r = uediff.open_diff(st, "Foo/A.uasset", a, None,
+                         launcher=lambda cmd: pytest.fail("프로세스를 띄우면 안 된다"),
+                         bridge=br, editor_running=lambda: True)
+    assert r["mode"] == "editor" and r["strategy"] == "file" and r["pid"] is None
+    op, args, timeout = br.calls[0]
+    assert op == "diff" and timeout == uediff.DIFF_TIMEOUT
+    assert args["left_label"] == a[:8] and args["right_label"] == "현재"
+    assert args["right_package"] == "/Game/Foo/A"
+    saved = st.cfg.root / "Saved" / "JokateDiff" / a[:8] / "A.uasset"     # 전략 1 용
+    content = st.cfg.content / "_JokateDiff" / a[:8] / "A.uasset"          # 전략 2 용
+    assert saved.read_bytes() == b"AAAA-v1" and content.read_bytes() == b"AAAA-v1"
+    assert args["left_file"] == saved.as_posix()
+    assert args["left_package"] == "/Game/_JokateDiff/%s/A" % a[:8]
+
+
+def test_open_diff_in_editor_two_versions(st: storemod.Store, tmp_path: Path) -> None:
+    st.cfg.editor_exe = str(fake_exe(tmp_path))
+    a, b = shas(st)
+    br = FakeBridge(resp={"ok": True, "strategy": "package"})
+    r = uediff.open_diff(st, "Foo/A.uasset", a, b, launcher=lambda cmd: 0, bridge=br,
+                         editor_running=lambda: True)
+    assert r["mode"] == "editor" and r["strategy"] == "package"
+    args = br.calls[0][1]
+    assert args["right_package"] == "/Game/_JokateDiff/%s/A" % b[:8]
+    assert (st.cfg.content / "_JokateDiff" / b[:8] / "A.uasset").read_bytes() == b"AAAA-v2-longer"
+
+
+def test_open_diff_falls_back_when_bridge_fails(st: storemod.Store, tmp_path: Path) -> None:
+    st.cfg.editor_exe = str(fake_exe(tmp_path))
+    a, b = shas(st)
+    seen = []
+    br = FakeBridge(resp={"ok": False, "error": "로드 실패"})
+    r = uediff.open_diff(st, "Foo/A.uasset", a, b, launcher=lambda cmd: seen.append(cmd) or 11,
+                         bridge=br, editor_running=lambda: True)
+    assert r["mode"] == "process" and r["pid"] == 11 and "로드 실패" in r["note"]
+    assert seen and seen[0][2] == "-diff"
+
+
+def test_open_diff_no_bridge_is_process(st: storemod.Store, tmp_path: Path) -> None:
+    st.cfg.editor_exe = str(fake_exe(tmp_path))
+    a, b = shas(st)
+    br = FakeBridge(alive=False)
+    r = uediff.open_diff(st, "Foo/A.uasset", a, b, launcher=lambda cmd: 5, bridge=br,
+                         editor_running=lambda: False)
+    assert r["mode"] == "process" and r["pid"] == 5 and br.calls == [] and r["note"]
+
+
+# ---- _JokateDiff 는 절대 추적하지 않는다 ----
+def test_jokatediff_never_tracked(st: storemod.Store) -> None:
+    from jokate import watch as watchmod
+    assert st.cfg.tier_of(Path("_JokateDiff/abc12345/A.uasset")) is None
+    st.cfg.vendor = ["*"]          # 설정과 무관하게 무시
+    st.cfg.ignore = []
+    assert st.cfg.tier_of(Path("_JokateDiff/abc12345/A.uasset")) is None
+    d = st.cfg.content / "_JokateDiff" / "abc12345"
+    d.mkdir(parents=True)
+    (d / "A.uasset").write_bytes(b"AAAA-v1")
+    assert not any(r.startswith("_JokateDiff/") for r in watchmod.fingerprint(st.cfg))
+    assert not any(r.rel.startswith("_JokateDiff/") for r in st.scan_authored())
+
+
+def test_cleanup_tmp_removes_editor_dirs(st: storemod.Store) -> None:
+    import os
+    a, _ = shas(st)
+    uediff.extract_for_editor(st, "Foo/A.uasset", a)
+    saved = uediff.editor_tmp_dir(st.cfg) / a[:8]
+    content = uediff.content_diff_dir(st.cfg) / a[:8]
+    assert saved.is_dir() and content.is_dir()
+    assert uediff.cleanup_tmp(st) == 0 and saved.is_dir()
+    old = saved.stat().st_mtime - 60 * 60 * 48
+    for d in (saved, content):
+        os.utime(d, (old, old))
+    assert uediff.cleanup_tmp(st, max_age_hours=24) == 2
+    assert not saved.exists() and not content.exists()
+
+
+def test_api_uediff_reports_mode(st: storemod.Store, tmp_path: Path) -> None:
+    st.cfg.editor_exe = str(fake_exe(tmp_path))
+    a, b = shas(st)
+    r = web.api_uediff(st, "Foo/A.uasset", a, b, launcher=lambda cmd: 3)
+    assert r["mode"] == "process" and "note" in r and "strategy" in r
