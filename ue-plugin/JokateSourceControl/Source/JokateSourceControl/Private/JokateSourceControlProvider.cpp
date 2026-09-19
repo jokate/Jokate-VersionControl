@@ -701,6 +701,54 @@ void FJokateSourceControlProvider::Tick()
 		bStateChangedPending = false;
 		OnSourceControlStateChanged.Broadcast();
 	}
+
+	if (bAvailable)
+	{
+		bWasConnected = true;
+	}
+	else if (bWasConnected)
+	{
+		TryReconnect();
+	}
+}
+
+void FJokateSourceControlProvider::TryReconnect()
+{
+	const double Now = FPlatformTime::Seconds();
+	if (bReconnectInFlight || Now - LastReconnectAttempt < 5.0)
+	{
+		return;
+	}
+	LastReconnectAttempt = Now;
+	bReconnectInFlight = true;
+
+	// 데몬이 다른 포트로 다시 떴을 수 있으므로 daemon.json 을 다시 읽는다.
+	FJokateSourceControlModule::Get().AccessSettings().LoadSettings();
+
+	TWeakPtr<bool, ESPMode::ThreadSafe> WeakAlive = AliveFlag;
+	Async(EAsyncExecution::ThreadPool, [this, WeakAlive]()
+	{
+		if (!WeakAlive.IsValid())
+		{
+			return;
+		}
+		FText Error;
+		const bool bConnected = CheckConnection(Error);
+		AsyncTask(ENamedThreads::GameThread, [this, WeakAlive, bConnected]()
+		{
+			if (!WeakAlive.IsValid())
+			{
+				return;
+			}
+			bReconnectInFlight = false;
+			if (bConnected && !bAvailable)
+			{
+				bAvailable = true;
+				bStateChangedPending = true;
+				UE_LOG(LogJokateSourceControl, Log, TEXT("Jokate 데몬에 다시 연결했습니다."));
+			}
+		});
+	});
 }
 
 #if SOURCE_CONTROL_WITH_SLATE

@@ -68,6 +68,15 @@ def test_state_file(cfg) -> None:
     daemonmod.clear_state(cfg)  # 없어도 조용히
 
 
+def test_clear_state_only_own_pid(cfg) -> None:
+    """물러나는 데몬이 새 데몬의 daemon.json 을 지우면 안 된다."""
+    daemonmod.write_state(cfg, 8765, pid=111)           # 새 데몬이 쓴 파일
+    daemonmod.clear_state(cfg, only_pid=222)            # 옛 데몬의 정리
+    assert daemonmod.read_state(cfg)["pid"] == 111
+    daemonmod.clear_state(cfg, only_pid=111)
+    assert daemonmod.read_state(cfg) is None
+
+
 def test_running_state_dead_pid(cfg) -> None:
     assert daemonmod.pid_alive(None) is False
     assert daemonmod.pid_alive(0) is False

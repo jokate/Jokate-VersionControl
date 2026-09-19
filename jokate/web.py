@@ -285,13 +285,14 @@ def api_confirm(store: Store, message: str, only: list[str] | None = None,
     """확정(confirm). only 가 비면 확정 안 된 변경 전부, 확정할 게 없으면 snapshot=None.
 
     응답의 cleared 는 이번 확정이 지운 작업 중 기록 수.
-    editor_managed=True 면 에디터 브릿지를 쓰지 않는다(확정은 파일을 건드리지 않아 원래 안 쓴다 —
-    UE 프로바이더가 discard 와 같은 형태로 보낼 수 있게 받아만 둔다).
+    editor_managed=True 면 에디터 브릿지를 쓰지 않는다 — UE 프로바이더는 게임 스레드에서 응답을
+    기다리므로, 여기서 브릿지(의미 diff 사이드카 받기)를 부르면 브릿지 시간 초과까지 서로 멈춘다.
+    사이드카는 데몬의 감시 루프가 저장 직후 따로 받아 둔다.
     """
     only = [str(x) for x in (only or []) if str(x).strip()]
     r = store.confirm(message, only=only or None)
     snap, d, stored = r
-    if snap is not None:
+    if snap is not None and not editor_managed:
         metamod.capture_for_snapshot(store, d)
     return {"snapshot": _snapshot(snap) if snap else None, "diff": _diff(d), "stored": stored,
             "cleared": r.cleared}

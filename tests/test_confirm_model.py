@@ -173,6 +173,24 @@ def test_discard_leaves_single_undo_point(project: Path) -> None:
     st.close()
 
 
+def test_partial_discard_keeps_journal_while_other_changes_remain(project: Path) -> None:
+    """애셋 하나만 버렸는데 다른 애셋의 확정 안 된 변경이 남아 있으면 작업 중 기록을 지우지 않는다."""
+    st = _st(project)
+    st.confirm("처음 확정")
+    write(st, "A.uasset", b"AAAA-v2")
+    write(st, "B.uasset", b"BBBB-v2")
+    st.snap("")
+    before = [s.id for s in st.journal()]
+    r = st.revert_to_baseline(["Foo/A.uasset"], check_editor=False)
+    assert (st.cfg.content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v1"
+    assert (st.cfg.content / "Foo" / "B.uasset").read_bytes() == b"BBBB-v2"
+    assert r.cleared == 0 and set(before) <= {s.id for s in st.journal()}
+    # 남은 변경까지 버리면 그때 정리된다
+    r2 = st.revert_to_baseline(["Foo/B.uasset"], check_editor=False)
+    assert r2.undo is not None and [s.id for s in st.journal()] == [r2.undo.id]
+    st.close()
+
+
 def test_discard_without_new_safety_keeps_head_as_undo(project: Path) -> None:
     """안전 스냅샷을 새로 만들지 않아도(HEAD 가 곧 버리기 직전 상태) 실행 취소 지점은 남는다."""
     st = _st(project)

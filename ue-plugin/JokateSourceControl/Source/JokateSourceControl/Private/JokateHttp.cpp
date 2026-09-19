@@ -42,6 +42,8 @@ FJokateHttpResult FJokateHttp::Request(const FString& Verb, const FString& BaseU
 	HttpRequest->SetVerb(Verb);
 	HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
 	HttpRequest->SetTimeout(TimeoutSeconds);
+	// 기본 활동 타임아웃(30초)이 더 짧아 확정처럼 오래 걸리는 요청이 중간에 끊기지 않게 한다.
+	HttpRequest->SetActivityTimeout(TimeoutSeconds);
 	if (!Body.IsEmpty())
 	{
 		HttpRequest->SetContentAsString(Body);

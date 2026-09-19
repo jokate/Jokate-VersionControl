@@ -78,6 +78,14 @@ private:
 
 	bool bAvailable = false;
 	bool bStateChangedPending = false;
+
+	/** 데몬 재시작 등으로 끊겼을 때 Tick 에서 주기적으로 다시 붙는다. */
+	void TryReconnect();
+	bool bWasConnected = false;
+	bool bReconnectInFlight = false;
+	double LastReconnectAttempt = 0.0;
+	TSharedRef<bool, ESPMode::ThreadSafe> AliveFlag = MakeShared<bool, ESPMode::ThreadSafe>(true);
+
 	FString HeadFix;
 	FText LastError;
 };

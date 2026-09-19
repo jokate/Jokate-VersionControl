@@ -58,7 +58,13 @@ def write_state(cfg: Config, port: int, pid: int | None = None) -> dict:
     return s
 
 
-def clear_state(cfg: Config) -> None:
+def clear_state(cfg: Config, *, only_pid: int | None = None) -> None:
+    """상태 파일을 지운다. only_pid 를 주면 그 pid 가 쓴 파일일 때만 —
+    물러나는 데몬이, 그 사이 새로 뜬 데몬의 daemon.json 을 지우지 않게 한다."""
+    if only_pid is not None:
+        s = read_state(cfg)
+        if s and int(s.get("pid") or 0) != int(only_pid):
+            return
     try:
         state_path(cfg).unlink()
     except OSError:
@@ -368,7 +374,7 @@ def run(cfg: Config, port: int | None = None, interval: float = 2.0, debounce: f
         httpd.shutdown()
         httpd.server_close()
         t_watch.join(timeout=3)
-        clear_state(cfg)
+        clear_state(cfg, only_pid=control.pid)
         control.log(f"{format_ts(time.time())}  daemon 종료")
     return 0
 

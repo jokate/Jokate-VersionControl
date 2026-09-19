@@ -107,6 +107,8 @@ def test_editor_managed_skips_bridge(st: storemod.Store, monkeypatch: pytest.Mon
 
     monkeypatch.setattr(bridgemod, "request", boom)
     monkeypatch.setattr(bridgemod, "bridge_alive", boom)
+    # 사이드카 받기도 브릿지 호출이다 — 메타 대상 클래스가 아니어도 시도조차 하면 안 된다.
+    monkeypatch.setattr(web.metamod, "capture_for_snapshot", boom)
     (st.cfg.content / "Foo" / "A.uasset").write_bytes(b"AAAA-v2")
     web.api_confirm(st, "에디터 확정", ["Foo/A.uasset"], True)
     (st.cfg.content / "Foo" / "A.uasset").write_bytes(b"AAAA-v3")

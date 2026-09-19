@@ -438,8 +438,13 @@ class Store:
         새로 만든 안전 스냅샷(journal)이거나, 안전 스냅샷을 새로 만들지 않았으면(되돌릴 애셋이
         HEAD 그대로였음) 그 시점 HEAD — 그 HEAD 와 같은 트리를 가진 확정 버전(fix)이 있으면
         그쪽을 쓰고 HEAD journal 은 지운다. 남길 게 없으면 undo 는 None.
+
+        일부 애셋만 버렸고(assets 지정) 확정 안 된 변경이 아직 남아 있으면 작업 중 기록을 지우지
+        않는다 — 에디터에서 애셋 하나를 Revert 했다고 다른 애셋의 기록까지 사라지면 안 된다.
         """
         r = self.apply_restore(self.plan_revert_to_baseline(assets), **kw)
+        if assets and not self.status().empty:
+            return replace(r, undo=r.safety, cleared=0)
         undo_id = None
         if r.safety is not None:
             if r.safety_created or r.safety.role == "fix":
