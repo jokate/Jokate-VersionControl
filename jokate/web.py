@@ -27,6 +27,13 @@ JSON API
   POST /api/prune  {dry_run:bool}          오래된 auto 스냅샷 정리 + GC → {ids, objects, bytes}
   GET  /                             web_static/index.html
 
+UE 리비전 컨트롤 프로바이더용
+  GET  /api/ping                     {ok, project, root, content, port, build, api}
+  POST /api/states {rels?:[rel]}     {head_fix, states:{rel:{state,tier,sha,baseline_sha,size,cls,noise}}}
+  GET  /api/history?rel=&limit=50    확정 버전 이력 [{id,revision,message,ts,time,sha,size,action}]
+  POST /api/extract {rel, sha}       Saved/JokateDiff/<sha8>/<이름> 로 꺼내기 → {ok, path}
+  POST /api/confirm|/api/discard 에 editor_managed:bool (true 면 브릿지 호출 안 함)
+
 핸들러 로직은 api_* 순수 함수로 분리해 서버 없이 테스트한다.
 """
 from __future__ import annotations
@@ -43,10 +50,11 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import meta as metamod
 from . import uediff as uediffmod
-from .config import Config
+from .config import ASSET_EXTS, Config
+from .scan import _scan_one
 from .store import (Diff, RestoreBlocked, Snapshot, SquashHasLabels, Store, TreeEntry,
                     dep_pkg, deps_change, diff_trees, format_ts)
-from .uasset import read_package
+from .uasset import is_resave_only, read_package
 
 _HEX = re.compile(r"[0-9a-fA-F]+")
 
@@ -272,10 +280,13 @@ def api_status(store: Store) -> dict:
     return {"diff": _diff(d, _pkgs_after(base, d))}
 
 
-def api_confirm(store: Store, message: str, only: list[str] | None = None) -> dict:
+def api_confirm(store: Store, message: str, only: list[str] | None = None,
+                editor_managed: bool = False) -> dict:
     """확정(confirm). only 가 비면 확정 안 된 변경 전부, 확정할 게 없으면 snapshot=None.
 
     응답의 cleared 는 이번 확정이 지운 작업 중 기록 수.
+    editor_managed=True 면 에디터 브릿지를 쓰지 않는다(확정은 파일을 건드리지 않아 원래 안 쓴다 —
+    UE 프로바이더가 discard 와 같은 형태로 보낼 수 있게 받아만 둔다).
     """
     only = [str(x) for x in (only or []) if str(x).strip()]
     r = store.confirm(message, only=only or None)
@@ -337,12 +348,14 @@ def api_revert(store: Store, assets: list[str] | None = None) -> dict:
 
 
 def api_discard_apply(store: Store, assets: list[str] | None = None,
-                      discard_dirty: bool = False) -> dict:
+                      discard_dirty: bool = False, editor_managed: bool = False) -> dict:
     """변경 버리기 적용(마지막 확정 상태로). RestoreBlocked(→409) 규칙은 /api/restore 와 동일.
 
     응답의 undo 는 남긴 '실행 취소 지점'(없으면 None), cleared 는 지운 작업 중 기록 수.
+    editor_managed=True 면 에디터 브릿지 호출을 하지 않는다(UE 프로바이더가 직접 리로드).
     """
-    r = store.revert_to_baseline(assets or None, discard_dirty=discard_dirty)
+    r = store.revert_to_baseline(assets or None, discard_dirty=discard_dirty,
+                                 editor_managed=editor_managed)
     return {"ok": True, "safety": _snapshot(r.safety), "result": _snapshot(r.result),
             "written": r.written, "deleted": r.deleted, "reloaded": r.reloaded,
             "safety_created": r.safety_created,
@@ -400,6 +413,137 @@ def api_uediff_plan(store: Store) -> dict:
     """diff 를 열면 어떤 방식이 될지 미리 알려준다 → {ok, mode, editor_running, bridge, hint}."""
     p = uediffmod.plan_diff(store)
     return {"ok": True, **p}
+
+
+# ---- UE 리비전 컨트롤 프로바이더용 API ----
+API_VERSION = 1
+# (rel, size, mtime) → (sha, cls) — 연속 호출에서 같은 파일을 다시 해시하지 않기 위한 짧은 캐시
+_states_cache: dict[tuple[str, int, float], tuple[str, str]] = {}
+_states_lock = threading.Lock()
+
+
+def norm_rel(rel) -> str:
+    """Content 기준 rel 정규화: 역슬래시 → 슬래시, 앞뒤 슬래시 제거."""
+    return str(rel or "").replace("\\", "/").strip("/")
+
+
+def _scan_cached(cfg: Config, rel: str) -> tuple[str, int, str] | None:
+    """작업 트리의 rel → (sha, size, cls). 파일이 없으면 None. (rel,size,mtime) 로 캐시."""
+    p = cfg.content / rel
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    key = (rel, st.st_size, st.st_mtime)
+    with _states_lock:
+        hit = _states_cache.get(key)
+    if hit is not None:
+        return hit[0], st.st_size, hit[1]
+    rec = _scan_one(cfg, p, "authored", True)
+    with _states_lock:
+        if len(_states_cache) > 4000:
+            _states_cache.clear()
+        _states_cache[key] = (rec.sha, rec.cls)
+    return rec.sha, st.st_size, rec.cls
+
+
+def _state_entry(store: Store, base: dict[str, TreeEntry], rel: str) -> dict:
+    """rel 하나의 baseline 대비 상태."""
+    cfg = store.cfg
+    info = {"state": "untracked", "tier": "", "sha": "", "baseline_sha": "",
+            "size": 0, "cls": "", "noise": False}
+    if not rel or ".." in rel.split("/") or ":" in rel:      # 경로 탈출·절대경로
+        return info
+    if os.path.splitext(rel)[1].lower() not in ASSET_EXTS:
+        return info
+    tier = cfg.tier_of(Path(rel))
+    if tier != "authored":                                   # vendor·ignore 는 추적 안 함
+        info["tier"] = tier or ""
+        return info
+    info["tier"] = "authored"
+    b = base.get(rel)
+    info["baseline_sha"] = b.sha if b else ""
+    cur = _scan_cached(cfg, rel)
+    if cur is None:
+        if b is None:
+            info["state"] = "missing"
+        else:
+            info.update(state="deleted", size=b.size, cls=b.cls)
+        return info
+    sha, size, cls = cur
+    info.update(sha=sha, size=size, cls=cls or (b.cls if b else ""))
+    if b is None:
+        info["state"] = "added"
+    elif b.sha == sha:
+        info["state"] = "clean"
+    else:
+        info["state"] = "modified"
+        try:
+            info["noise"] = bool(is_resave_only(store.object_path(b.sha), cfg.content / rel))
+        except Exception:  # noqa: BLE001
+            info["noise"] = False
+    return info
+
+
+def api_states(store: Store, rels: list[str] | None = None) -> dict:
+    """baseline(마지막 확정 상태) 대비 각 rel 의 상태 → {head_fix, states}.
+
+    state: clean | modified | added | deleted | untracked | missing (이동은 added+deleted).
+    rels 가 비면 추적 대상 전체(baseline ∪ 작업 트리)를 훑는다.
+    """
+    base = store.baseline()
+    if rels:
+        want = [norm_rel(r) for r in rels]
+    else:
+        want = sorted(set(base) | {r.rel for r in store.scan_authored()})
+    states = {rel: _state_entry(store, base, rel) for rel in want}
+    fix = store.head_fix()
+    head = {"id": fix.id, "message": fix.message, "time": format_ts(fix.ts)} if fix else None
+    return {"head_fix": head, "states": states}
+
+
+def api_history(store: Store, rel: str, limit: int = 50) -> list[dict]:
+    """애셋의 '확정 버전' 이력(fix 스냅샷에서 sha 가 바뀐 지점)만, 최신순.
+
+    revision 은 1부터 오름차순 번호, action 은 add|edit|delete. 작업 중 기록(journal)은 제외.
+    """
+    rel = norm_rel(rel)
+    rows = store.db.execute(
+        "SELECT s.id, s.message, s.ts, t.sha, t.size FROM snapshots s "
+        "LEFT JOIN tree t ON t.snapshot_id = s.id AND t.rel = ? "
+        "WHERE s.role='fix' ORDER BY s.id ASC", (rel,)).fetchall()
+    out: list[dict] = []
+    prev: str | None = None
+    rev = 0
+    for sid, message, ts, sha, size in rows:
+        if sha == prev:
+            continue
+        if sha is None:
+            action, sha_v, size_v = "delete", "", 0
+        else:
+            action, sha_v, size_v = ("add" if prev is None else "edit"), sha, int(size or 0)
+        rev += 1
+        out.append({"id": sid, "revision": rev, "message": message, "ts": ts,
+                    "time": format_ts(ts), "sha": sha_v, "size": size_v, "action": action})
+        prev = sha
+    out.reverse()
+    return out[:limit] if limit and limit > 0 else out
+
+
+def api_extract(store: Store, rel: str, sha: str) -> dict:
+    """버전을 <project>/Saved/JokateDiff/<sha8>/<이름> 으로 꺼낸다 → {ok, path}.
+
+    ValueError(sha 형식 → 400) / KeyError(객체 없음 → 404) 는 호출자가 처리.
+    """
+    p = uediffmod.extract_to_saved(store, rel, sha)
+    return {"ok": True, "path": p.as_posix()}
+
+
+def api_ping(cfg: Config, port: int | None = None) -> dict:
+    """이 데몬이 어느 프로젝트의 것인지 → {ok, project, root, content, port, build, api}."""
+    return {"ok": True, "project": cfg.root.name, "root": cfg.root.as_posix(),
+            "content": cfg.content.as_posix(), "port": int(port or cfg.port),
+            "build": BUILD_ID, "api": API_VERSION}
 
 
 class DaemonUnavailable(Exception):
@@ -577,6 +721,14 @@ def make_handler(cfg: Config, control=None):
                 elif path in ("/api/revert", "/api/discard"):
                     assets = q.get("asset", [])
                     self._json(self._run(lambda st: api_discard(st, assets)))
+                elif path == "/api/ping":
+                    self._json(api_ping(cfg))
+                elif path == "/api/history":
+                    rel = q.get("rel", [""])[0]
+                    if not rel:
+                        raise ValueError("rel 필요")
+                    limit = int(q.get("limit", ["50"])[0] or 50)
+                    self._json(self._run(lambda st: api_history(st, rel, limit)))
                 elif path == "/api/uediff/plan":
                     self._json(self._run(api_uediff_plan))
                 elif path.startswith("/api/restore/"):
@@ -604,13 +756,27 @@ def make_handler(cfg: Config, control=None):
                     only = body.get("only") or []
                     if not isinstance(only, list):
                         raise ValueError("only 는 rel 목록")
-                    self._json(self._run(lambda st: api_confirm(st, message, only)))
+                    managed = bool(body.get("editor_managed", False))
+                    self._json(self._run(lambda st: api_confirm(st, message, only, managed)))
                 elif u.path in ("/api/revert", "/api/discard"):
                     assets = body.get("assets") or []
                     if not isinstance(assets, list):
                         raise ValueError("assets 는 rel 목록")
                     discard = bool(body.get("discard_dirty", False))
-                    self._json(self._run(lambda st: api_discard_apply(st, [str(x) for x in assets], discard)))
+                    managed = bool(body.get("editor_managed", False))
+                    self._json(self._run(lambda st: api_discard_apply(
+                        st, [str(x) for x in assets], discard, managed)))
+                elif u.path == "/api/states":
+                    rels = body.get("rels") or []
+                    if not isinstance(rels, list):
+                        raise ValueError("rels 는 rel 목록")
+                    self._json(self._run(lambda st: api_states(st, [str(x) for x in rels])))
+                elif u.path == "/api/extract":
+                    rel = str(body.get("rel", "")).strip()
+                    sha = str(body.get("sha", "")).strip()
+                    if not rel or not sha:
+                        raise ValueError("rel, sha 필요")
+                    self._json(self._run(lambda st: api_extract(st, rel, sha)))
                 elif u.path == "/api/squash":
                     ids = body.get("ids") or []
                     if not isinstance(ids, list):

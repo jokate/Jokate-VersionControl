@@ -524,7 +524,7 @@ class Store:
                     plan.broken.append((rel, dep))
 
     def apply_restore(self, plan: "RestorePlan", *, check_editor: bool = True,
-                      discard_dirty: bool = False) -> "RestoreResult":
+                      discard_dirty: bool = False, editor_managed: bool = False) -> "RestoreResult":
         """계획 적용: 안전 스냅샷(되돌릴 애셋만) → 파일 복사/삭제 → 결과 스냅샷(되돌릴 애셋만).
 
         두 스냅샷 모두 '이번 롤백이 건드리는 rel' 만 담는 부분 스냅샷이라, 롤백과 무관한 애셋의
@@ -532,9 +532,13 @@ class Store:
 
         에디터 실행 중이면 브릿지(jokate.bridge)가 살아 있어야 하고, 대상 패키지가 dirty 면 중단
         (discard_dirty=True 면 통과). 파일 적용 후 에디터에 reload 요청.
+
+        editor_managed=True 면 브릿지 호출(dirty 확인·release·reload)을 전혀 하지 않는다 —
+        언리얼 리비전 컨트롤 프로바이더가 패키지 언로드·리로드를 직접 하는 경우.
+        사전 잠금 검사·replace 재시도·tmp 정리는 그대로 한다.
         """
         use_bridge = False
-        if check_editor and editor_running(self.cfg):
+        if check_editor and not editor_managed and editor_running(self.cfg):
             from . import bridge
             if not bridge.bridge_alive(self.cfg):
                 raise RestoreBlocked("에디터가 켜져 있는데 브릿지가 없다 — 에디터 Python 콘솔에서 "

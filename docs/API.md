@@ -34,6 +34,34 @@
 | `POST /api/uediff` | `{rel, a, b?}` | `{ok, mode:"editor"\|"process", strategy, note, pid, left, right}` — 에디터가 켜져 있으면 **반드시** 그 에디터에서 열고, 꺼져 있을 때만 새 에디터 프로세스(`b` 없으면 현재 파일과 비교) | 400 `rel`/`a` 없음, 409 에디터 못 찾음 `{ok:false, error}`, 409 에디터는 켜져 있는데 브릿지 꺼짐·op 실패 `{ok:false, error, mode:"editor"}` |
 | `POST /api/prune` | `{dry_run:bool}` | `{ids, objects, bytes}` (정리 + GC) | — |
 
+## UE 프로바이더용 (리비전 컨트롤 플러그인)
+
+언리얼 에디터의 리비전 컨트롤 프로바이더(`ISourceControlProvider`)가 쓰는 엔드포인트. 오류 규칙은 위와 같다.
+
+| 메서드·경로 | 요청 | 응답 | 오류 |
+|---|---|---|---|
+| `GET /api/ping` | — | `{ok:true, project, root, content, port, build, api:1}` — 이 데몬이 내 프로젝트의 것인지 확인 (`root`·`content` 는 슬래시 절대경로) | — |
+| `POST /api/states` | `{rels?:[rel]}` (비면 추적 대상 전체) | `{head_fix:{id,message,time}\|null, states:{rel:{state, tier, sha, baseline_sha, size, cls, noise}}}` | 400 `rels` 형식 |
+| `GET /api/history?rel=<rel>&limit=50` | — | 그 애셋의 **확정 버전** 이력만(작업 중 기록 제외), 최신순 `[{id, revision, message, ts, time, sha, size, action:"add"\|"edit"\|"delete"}]` | 400 `rel` 없음 |
+| `POST /api/extract` | `{rel, sha}` | `{ok:true, path}` — `<project>/Saved/JokateDiff/<sha8>/<이름>` 에 풀어 둔 절대경로(슬래시). 이미 있으면 재사용 | 400 sha 형식, 404 객체 없음 |
+
+`state` 값은 baseline(마지막 확정 상태) 기준이다 — 자동 스냅샷이 찍혀도 바뀌지 않는다.
+
+| 값 | 뜻 |
+|---|---|
+| `clean` | baseline 과 동일 |
+| `modified` | baseline 에 있고 내용이 다름 (`noise:true` 면 리세이브만) |
+| `added` | baseline 에 없고 디스크에 있음 |
+| `deleted` | baseline 에 있고 디스크에 없음 |
+| `untracked` | vendor 등급·ignore·Content 밖(경로 탈출)·애셋 확장자 아님 |
+| `missing` | baseline 에도 디스크에도 없음 |
+
+이동은 `added` + `deleted` 로 풀어서 표현한다. `rel` 은 Content 기준 슬래시 경로(역슬래시·선행 슬래시는 정규화).
+
+`POST /api/confirm` 과 `POST /api/discard` 는 `editor_managed:bool` 을 추가로 받는다. `true` 면 서버는
+에디터 브릿지 호출(dirty 확인·release·reload)을 전혀 하지 않는다 — 언리얼의 리비전 컨트롤 흐름이
+패키지 언로드·리로드를 직접 하기 때문이다. 사전 잠금 검사·replace 재시도·tmp 정리는 그대로 동작한다.
+
 오류 응답은 공통으로 `{ok:false, error:"..."}` 형태이며, `ValueError` 계열은 400, 없는 경로·대상은 404, 진행이 막힌 경우(`RestoreBlocked`, `SquashHasLabels`, 객체 유실, 데몬 아님)는 409, 나머지는 500 이다.
 
 ## URL 쿼리 딥링크

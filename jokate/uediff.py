@@ -156,6 +156,22 @@ def extract_for_editor(store, rel: str, sha: str) -> dict:
             "package": f"/Game/{CONTENT_DIFF_DIR}/{sub}/{stem}"}
 
 
+def extract_to_saved(store, rel: str, sha: str) -> Path:
+    """버전을 <project>/Saved/JokateDiff/<sha8>/<원래 이름> 으로 꺼낸다(이미 있으면 재사용).
+
+    UE 리비전 컨트롤 프로바이더의 내장 diff 가 파일 경로로 직접 읽는다.
+    sha 검증·객체 확인은 extract_version 과 같다 (ValueError / KeyError).
+    """
+    src = extract_version(store, rel, sha)          # sha 검증 + 객체 존재 확인
+    name = Path(str(rel).replace("\\", "/").strip("/")).name or "asset"
+    out = editor_tmp_dir(store.cfg) / str(sha).strip().lower()[:8] / name
+    if out.exists() and out.stat().st_size == src.stat().st_size:
+        return out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, out)
+    return out
+
+
 def _cleanup_dirs(root: Path, cutoff: float) -> int:
     """<root>/<sha8>/ 중 오래된 폴더 삭제 → 지운 개수 (에디터가 잡고 있으면 조용히 건너뜀)."""
     n = 0
