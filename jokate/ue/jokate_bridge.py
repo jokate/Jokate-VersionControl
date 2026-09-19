@@ -545,12 +545,16 @@ def _op_export_meta(packages, args):
             row_struct = ""
         columns, rows, err = [], {}, None
         try:
+            # 열 단위 API 를 먼저 쓴다. export_data_table_to_json_string 은 행 구조체 모양에 따라
+            # 엔진의 JSON writer 에서 check(Stack.Top() == EJson::Object) 가 터진다(UE 5.7 확인) —
+            # 디버거가 붙어 있으면 멈추고, 없으면 에디터가 죽는다.
             if hasattr(unreal, "DataTableFunctionLibrary") and hasattr(
+                    unreal.DataTableFunctionLibrary, "get_data_table_row_names") and hasattr(
+                    unreal.DataTableFunctionLibrary, "get_data_table_column_as_string"):
+                columns, rows = _table_from_columns(asset)
+            elif hasattr(unreal, "DataTableFunctionLibrary") and hasattr(
                     unreal.DataTableFunctionLibrary, "export_data_table_to_json_string"):
                 columns, rows = _table_from_json_string(asset)
-            elif hasattr(unreal, "DataTableFunctionLibrary") and hasattr(
-                    unreal.DataTableFunctionLibrary, "get_data_table_row_names"):
-                columns, rows = _table_from_columns(asset)
             else:
                 err = "이 엔진 버전에는 DataTable 읽기 API 가 없음"
         except Exception as e:  # noqa: BLE001
