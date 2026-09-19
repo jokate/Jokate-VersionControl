@@ -15,9 +15,9 @@
 
 #define LOCTEXT_NAMESPACE "JokateSourceControl"
 
-FJokateHttpResult FJokateHttp::GetJson(const FString& BaseUrl, const FString& Path, float TimeoutSeconds)
+FJokateHttpResult FJokateHttp::GetJson(const FString& BaseUrl, const FString& Path, float TimeoutSeconds, bool bQuiet)
 {
-	return Request(TEXT("GET"), BaseUrl, Path, FString(), TimeoutSeconds);
+	return Request(TEXT("GET"), BaseUrl, Path, FString(), TimeoutSeconds, bQuiet);
 }
 
 FJokateHttpResult FJokateHttp::PostJson(const FString& BaseUrl, const FString& Path, const TSharedPtr<FJsonObject>& Body, float TimeoutSeconds)
@@ -32,7 +32,7 @@ FJokateHttpResult FJokateHttp::PostJson(const FString& BaseUrl, const FString& P
 	return Request(TEXT("POST"), BaseUrl, Path, BodyText, TimeoutSeconds);
 }
 
-FJokateHttpResult FJokateHttp::Request(const FString& Verb, const FString& BaseUrl, const FString& Path, const FString& Body, float TimeoutSeconds)
+FJokateHttpResult FJokateHttp::Request(const FString& Verb, const FString& BaseUrl, const FString& Path, const FString& Body, float TimeoutSeconds, bool bQuiet)
 {
 	FJokateHttpResult Result;
 
@@ -91,7 +91,15 @@ FJokateHttpResult FJokateHttp::Request(const FString& Verb, const FString& BaseU
 	{
 		Result.ErrorText = FText::Format(
 			LOCTEXT("JokateHttpNoResponse", "Jokate 데몬이 응답하지 않습니다: {0}"), FText::FromString(Url));
-		UE_LOG(LogJokateSourceControl, Warning, TEXT("요청 실패: %s"), *Url);
+		if (bQuiet)
+		{
+			// 데몬이 꺼져 있는 동안의 재연결 핑 — 로그를 어지럽히지 않는다.
+			UE_LOG(LogJokateSourceControl, Verbose, TEXT("요청 실패(조용히): %s"), *Url);
+		}
+		else
+		{
+			UE_LOG(LogJokateSourceControl, Warning, TEXT("요청 실패: %s"), *Url);
+		}
 		return Result;
 	}
 

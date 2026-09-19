@@ -48,8 +48,13 @@ public:
 #endif
 
 private:
-	/** 데몬에 /api/ping 을 보내 이 프로젝트에 연결됐는지 확인한다. 게임 스레드에서만 호출. */
-	bool CheckConnection(FText& OutError);
+	/**
+	 * 데몬에 /api/ping 을 보내 이 프로젝트에 연결됐는지 확인한다.
+	 * bQuiet 이면 실패 로그를 Verbose 로 낮춘다(주기적 재연결 시도용).
+	 * OutHeadFix 가 있으면 ping 의 head_fix 를 표시용 문자열로 채운다.
+	 * 상태 캐시를 만지지 않으므로 워커 스레드에서도 부를 수 있다.
+	 */
+	bool CheckConnection(FText& OutError, bool bQuiet = false, FString* OutHeadFix = nullptr);
 
 	/** 파일 목록의 상태를 데몬에서 받아 캐시에 반영한다(게임 스레드). 파일이 비면 전체. */
 	bool RunUpdateStatus(const TArray<FString>& InFiles, FText& OutError, bool bUpdateHistory = false);
@@ -84,6 +89,9 @@ private:
 	bool bWasConnected = false;
 	bool bReconnectInFlight = false;
 	double LastReconnectAttempt = 0.0;
+	/** 연속 실패하면 5 → 10 → 30초로 늘리고, 다시 붙으면 5초로 되돌린다. */
+	double ReconnectIntervalSeconds = 5.0;
+	static constexpr double MaxReconnectIntervalSeconds = 30.0;
 	TSharedRef<bool, ESPMode::ThreadSafe> AliveFlag = MakeShared<bool, ESPMode::ThreadSafe>(true);
 
 	FString HeadFix;

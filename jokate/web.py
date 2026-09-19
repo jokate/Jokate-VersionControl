@@ -540,11 +540,20 @@ def api_extract(store: Store, rel: str, sha: str) -> dict:
     return {"ok": True, "path": p.as_posix()}
 
 
-def api_ping(cfg: Config, port: int | None = None) -> dict:
-    """이 데몬이 어느 프로젝트의 것인지 → {ok, project, root, content, port, build, api}."""
-    return {"ok": True, "project": cfg.root.name, "root": cfg.root.as_posix(),
-            "content": cfg.content.as_posix(), "port": int(port or cfg.port),
-            "build": BUILD_ID, "api": API_VERSION}
+def api_ping(cfg: Config, port: int | None = None, store: Store | None = None) -> dict:
+    """이 데몬이 어느 프로젝트의 것인지 → {ok, project, root, content, port, build, api, pending, head_fix}.
+
+    store 를 주면 확정 안 된 변경 수(pending)와 마지막 확정(head_fix)까지 채운다.
+    """
+    out = {"ok": True, "project": cfg.root.name, "root": cfg.root.as_posix(),
+           "content": cfg.content.as_posix(), "port": int(port or cfg.port),
+           "build": BUILD_ID, "api": API_VERSION, "pending": 0, "head_fix": None}
+    if store is not None:
+        st = api_states(store)
+        out["pending"] = sum(1 for e in st["states"].values()
+                             if e["state"] in ("modified", "added", "deleted"))
+        out["head_fix"] = st["head_fix"]
+    return out
 
 
 class DaemonUnavailable(Exception):
@@ -723,7 +732,7 @@ def make_handler(cfg: Config, control=None):
                     assets = q.get("asset", [])
                     self._json(self._run(lambda st: api_discard(st, assets)))
                 elif path == "/api/ping":
-                    self._json(api_ping(cfg))
+                    self._json(self._run(lambda st: api_ping(cfg, store=st)))
                 elif path == "/api/history":
                     rel = q.get("rel", [""])[0]
                     if not rel:

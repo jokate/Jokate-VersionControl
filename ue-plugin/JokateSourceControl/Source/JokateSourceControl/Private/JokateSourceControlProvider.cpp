@@ -110,8 +110,25 @@ FText FJokateSourceControlProvider::GetStatusText() const
 	Args.Add(TEXT("Port"), FText::AsNumber(Port, &FNumberFormattingOptions::DefaultNoGrouping()));
 	Args.Add(TEXT("HeadFix"), HeadFix.IsEmpty() ? LOCTEXT("NoFix", "(확정 없음)") : FText::FromString(HeadFix));
 
-	return FText::Format(
-		LOCTEXT("JokateStatusText", "프로바이더: Jokate\n상태: {IsAvailable}\n포트: {Port}\n마지막 확정: {HeadFix}"), Args);
+	const TOptional<int> LocalChanges = GetNumLocalChanges();
+	Args.Add(TEXT("Pending"), FText::AsNumber(LocalChanges.IsSet() ? LocalChanges.GetValue() : 0));
+
+	FText Text = FText::Format(
+		LOCTEXT("JokateStatusText", "프로바이더: Jokate\n상태: {IsAvailable}\n포트: {Port}\n마지막 확정: {HeadFix}\n확정 안 된 변경: {Pending}개"), Args);
+
+	if (!bAvailable)
+	{
+		FFormatNamedArguments HintArgs;
+		HintArgs.Add(TEXT("Status"), Text);
+		HintArgs.Add(TEXT("Error"), LastError.IsEmpty()
+			? LOCTEXT("NoLastError", "Jokate 데몬이 응답하지 않습니다.")
+			: LastError);
+		Text = FText::Format(
+			LOCTEXT("JokateStatusTextOffline", "{Status}\n마지막 오류: {Error}\n(start.bat 을 실행하면 자동으로 다시 연결됩니다)"),
+			HintArgs);
+	}
+
+	return Text;
 }
 
 TMap<ISourceControlProvider::EStatus, FString> FJokateSourceControlProvider::GetStatus() const
@@ -134,10 +151,10 @@ bool FJokateSourceControlProvider::IsAvailable() const
 	return bAvailable;
 }
 
-bool FJokateSourceControlProvider::CheckConnection(FText& OutError)
+bool FJokateSourceControlProvider::CheckConnection(FText& OutError, bool bQuiet, FString* OutHeadFix)
 {
 	const FString BaseUrl = FJokateSourceControlModule::Get().AccessSettings().GetBaseUrl();
-	const FJokateHttpResult Result = FJokateHttp::GetJson(BaseUrl, TEXT("/api/ping"));
+	const FJokateHttpResult Result = FJokateHttp::GetJson(BaseUrl, TEXT("/api/ping"), FJokateHttp::DefaultTimeoutSeconds, bQuiet);
 	if (!Result.bOk || !Result.Json.IsValid())
 	{
 		OutError = Result.ErrorText.IsEmpty()
@@ -160,6 +177,22 @@ bool FJokateSourceControlProvider::CheckConnection(FText& OutError)
 		OutError = FText::Format(
 			LOCTEXT("WrongProject", "데몬이 다른 프로젝트({0})를 보고 있습니다."), FText::FromString(RootNormalized));
 		return false;
+	}
+
+	if (OutHeadFix != nullptr)
+	{
+		OutHeadFix->Reset();
+		const TSharedPtr<FJsonObject>* HeadObject = nullptr;
+		if (Result.Json->TryGetObjectField(TEXT("head_fix"), HeadObject) && HeadObject != nullptr && HeadObject->IsValid())
+		{
+			int32 FixId = 0;
+			FString Message;
+			(*HeadObject)->TryGetNumberField(TEXT("id"), FixId);
+			(*HeadObject)->TryGetStringField(TEXT("message"), Message);
+			*OutHeadFix = Message.IsEmpty()
+				? FString::Printf(TEXT("#%d"), FixId)
+				: FString::Printf(TEXT("#%d %s"), FixId, *Message);
+		}
 	}
 
 	OutError = FText::GetEmpty();
@@ -276,7 +309,15 @@ bool FJokateSourceControlProvider::RunUpdateStatus(const TArray<FString>& InFile
 	if (!Result.bOk)
 	{
 		OutError = Result.ErrorText.IsEmpty() ? LOCTEXT("StatesFailed", "상태를 받아오지 못했습니다.") : Result.ErrorText;
+		if (bAvailable)
+		{
+			// 끊긴 순간 한 번만 알린다. 이후 재연결 시도는 조용히 돈다.
+			UE_LOG(LogJokateSourceControl, Warning, TEXT("Jokate 데몬과 연결이 끊겼습니다. 다시 연결을 시도합니다."));
+			LastReconnectAttempt = FPlatformTime::Seconds();
+			ReconnectIntervalSeconds = 5.0;
+		}
 		bAvailable = false;
+		LastError = OutError;
 		return false;
 	}
 
@@ -715,7 +756,7 @@ void FJokateSourceControlProvider::Tick()
 void FJokateSourceControlProvider::TryReconnect()
 {
 	const double Now = FPlatformTime::Seconds();
-	if (bReconnectInFlight || Now - LastReconnectAttempt < 5.0)
+	if (bReconnectInFlight || Now - LastReconnectAttempt < ReconnectIntervalSeconds)
 	{
 		return;
 	}
@@ -733,17 +774,28 @@ void FJokateSourceControlProvider::TryReconnect()
 			return;
 		}
 		FText Error;
-		const bool bConnected = CheckConnection(Error);
-		AsyncTask(ENamedThreads::GameThread, [this, WeakAlive, bConnected]()
+		FString NewHeadFix;
+		const bool bConnected = CheckConnection(Error, /*bQuiet=*/true, &NewHeadFix);
+		AsyncTask(ENamedThreads::GameThread, [this, WeakAlive, bConnected, Error, NewHeadFix]()
 		{
 			if (!WeakAlive.IsValid())
 			{
 				return;
 			}
 			bReconnectInFlight = false;
-			if (bConnected && !bAvailable)
+			if (!bConnected)
+			{
+				// 연속 실패: 5 → 10 → 30초로 간격을 늘려 핑을 줄인다.
+				ReconnectIntervalSeconds = FMath::Min(ReconnectIntervalSeconds * 2.0, MaxReconnectIntervalSeconds);
+				LastError = Error;
+				return;
+			}
+			ReconnectIntervalSeconds = 5.0;
+			if (!bAvailable)
 			{
 				bAvailable = true;
+				LastError = FText::GetEmpty();
+				HeadFix = NewHeadFix;
 				bStateChangedPending = true;
 				UE_LOG(LogJokateSourceControl, Log, TEXT("Jokate 데몬에 다시 연결했습니다."));
 			}

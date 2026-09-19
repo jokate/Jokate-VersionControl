@@ -35,6 +35,9 @@ public:
 	}
 
 private:
+	/** Tools 메뉴에 'Jokate 리비전 컨트롤' 섹션을 등록한다(ToolMenus 준비 후 호출). */
+	void RegisterMenus();
+
 	FJokateSourceControlSettings Settings;
 	FJokateSourceControlProvider Provider;
 };

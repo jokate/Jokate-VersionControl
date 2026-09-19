@@ -16,6 +16,7 @@ public class JokateSourceControl : ModuleRules
 				"InputCore",
 				"SourceControl",
 				"Projects",
+				"ToolMenus",
 				"HTTP",
 				"Json"
 			}

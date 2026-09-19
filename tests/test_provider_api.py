@@ -133,3 +133,13 @@ def test_ping(st: storemod.Store) -> None:
     assert p["ok"] is True and p["api"] == 1 and p["project"] == "Proj"
     assert p["root"] == st.cfg.root.as_posix() and p["content"] == st.cfg.content.as_posix()
     assert "\\" not in p["root"] and p["port"] == st.cfg.port and p["build"]
+    assert p["pending"] == 0 and p["head_fix"] is None          # store 없이는 안 채운다
+
+    p = web.api_ping(st.cfg, store=st)
+    assert p["pending"] == 0 and p["head_fix"]["message"] == "처음 확정"
+
+    (st.cfg.content / "Foo" / "A.uasset").write_bytes(b"AAAA-v2")    # modified
+    (st.cfg.content / "Foo" / "C.uasset").write_bytes(b"CCCC")       # added
+    (st.cfg.content / "Foo" / "B.uasset").unlink()                   # deleted
+    p = web.api_ping(st.cfg, store=st)
+    assert p["pending"] == 3 and p["head_fix"]["id"] == 1 and p["head_fix"]["time"]

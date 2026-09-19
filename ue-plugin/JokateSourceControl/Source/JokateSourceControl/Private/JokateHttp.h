@@ -30,12 +30,12 @@ public:
 	static constexpr float DefaultTimeoutSeconds = 10.0f;
 	static constexpr float LongTimeoutSeconds = 60.0f;
 
-	/** GET <BaseUrl><Path> */
-	static FJokateHttpResult GetJson(const FString& BaseUrl, const FString& Path, float TimeoutSeconds = DefaultTimeoutSeconds);
+	/** GET <BaseUrl><Path> (bQuiet 면 실패 로그를 Verbose 로 낮춘다 — 주기적 재연결 핑용) */
+	static FJokateHttpResult GetJson(const FString& BaseUrl, const FString& Path, float TimeoutSeconds = DefaultTimeoutSeconds, bool bQuiet = false);
 
 	/** POST <BaseUrl><Path> (Body 가 null 이면 빈 오브젝트) */
 	static FJokateHttpResult PostJson(const FString& BaseUrl, const FString& Path, const TSharedPtr<FJsonObject>& Body, float TimeoutSeconds = DefaultTimeoutSeconds);
 
 private:
-	static FJokateHttpResult Request(const FString& Verb, const FString& BaseUrl, const FString& Path, const FString& Body, float TimeoutSeconds);
+	static FJokateHttpResult Request(const FString& Verb, const FString& BaseUrl, const FString& Path, const FString& Body, float TimeoutSeconds, bool bQuiet = false);
 };

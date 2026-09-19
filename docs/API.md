@@ -40,7 +40,7 @@
 
 | 메서드·경로 | 요청 | 응답 | 오류 |
 |---|---|---|---|
-| `GET /api/ping` | — | `{ok:true, project, root, content, port, build, api:1}` — 이 데몬이 내 프로젝트의 것인지 확인 (`root`·`content` 는 슬래시 절대경로) | — |
+| `GET /api/ping` | — | `{ok:true, project, root, content, port, build, api:1, pending, head_fix:{id,message,time}\|null}` — 이 데몬이 내 프로젝트의 것인지 확인 (`root`·`content` 는 슬래시 절대경로). `pending` 은 확정 안 된 변경 수(modified+added+deleted) | — |
 | `POST /api/states` | `{rels?:[rel]}` (비면 추적 대상 전체) | `{head_fix:{id,message,time}\|null, states:{rel:{state, tier, sha, baseline_sha, size, cls, noise}}}` | 400 `rels` 형식 |
 | `GET /api/history?rel=<rel>&limit=50` | — | 그 애셋의 **확정 버전** 이력만(작업 중 기록 제외), 최신순 `[{id, revision, message, ts, time, sha, size, action:"add"\|"edit"\|"delete"}]` | 400 `rel` 없음 |
 | `POST /api/extract` | `{rel, sha}` | `{ok:true, path}` — `<project>/Saved/JokateDiff/<sha8>/<이름>` 에 풀어 둔 절대경로(슬래시). 이미 있으면 재사용 | 400 sha 형식, 404 객체 없음 |

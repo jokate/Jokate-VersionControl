@@ -130,6 +130,21 @@ Jokate 를 언리얼의 **리비전 컨트롤(Revision Control)** 프로바이�
 | Mark for Add / 이름 바꾸기·이동 | 따로 할 일 없음 — authored 폴더의 애셋은 자동으로 추적된다. 상태만 다시 읽는다 |
 | Sync / Get Latest, Check Out | **지원하지 않음** — Jokate 는 로컬 전용이라 잠금·동기화 개념이 없다(편집은 언제나 자유) |
 
+상단 **툴(Tools) > Jokate 리비전 컨트롤** 에는 브릿지 없이도 쓰는 항목이 둘 있다 — **타임라인 열기**(브라우저로 `http://127.0.0.1:<포트>/`), **상태 새로 고침**(모든 애셋 상태를 데몬에서 다시 받기).
+
+동작 규칙:
+
+- 애셋 하나만 Revert 하면 다른 애셋의 **작업 중 기록은 그대로 남는다**. 확정 안 된 변경이 하나도 없게 되는 순간 작업 중 기록이 정리된다
+- Submit(확정)은 그 이전의 작업 중 기록을 전부 정리한다
+
+문제 해결:
+
+| 증상 | 해결 |
+|---|---|
+| 상태가 '연결 안 됨' | `start.bat` 으로 데몬을 켠다. 켜지면 플러그인이 알아서 다시 붙는다(5 → 10 → 30초 간격으로 조용히 재시도, 데몬 포트가 바뀌어도 따라간다) |
+| Submit 이 오래 걸림 | 데몬이 낡았을 수 있다 — 웹 상단의 stale 배너에서 '재시작' 을 누르거나 `start.bat` 을 다시 실행한다 |
+| 리비전 컨트롤 목록에 Jokate 가 없음 | `python -m jokate plugin-install <project>` 후 에디터를 닫고 다시 빌드한다 |
+
 포트는 `<project>/.jokate/daemon.json` 이 있으면 그 값을 우선 쓰고, 없으면 `SourceControlSettings.ini` 의 `[JokateSourceControl.JokateSourceControlSettings] Port` 를 쓴다.
 
 ## 레이아웃 조정
