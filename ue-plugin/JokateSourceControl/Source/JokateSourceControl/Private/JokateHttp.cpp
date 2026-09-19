@@ -103,6 +103,16 @@ FJokateHttpResult FJokateHttp::Request(const FString& Verb, const FString& BaseU
 		{
 			Result.Json = Root;
 		}
+		else
+		{
+			// 최상위가 배열인 응답(/api/history)도 받아들인다.
+			TArray<TSharedPtr<FJsonValue>> RootArray;
+			const TSharedRef<TJsonReader<>> ArrayReader = TJsonReaderFactory<>::Create(ResponseText);
+			if (FJsonSerializer::Deserialize(ArrayReader, RootArray))
+			{
+				Result.JsonArray = RootArray;
+			}
+		}
 	}
 
 	if (StatusCode >= 200 && StatusCode < 300)

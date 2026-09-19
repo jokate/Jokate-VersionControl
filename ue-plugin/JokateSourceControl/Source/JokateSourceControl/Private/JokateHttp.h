@@ -5,13 +5,17 @@
 #include "CoreMinimal.h"
 
 class FJsonObject;
+class FJsonValue;
 
 /** 동기 HTTP 결과. */
 struct FJokateHttpResult
 {
 	bool bOk = false;
 	int32 StatusCode = 0;
+	/** 응답이 JSON 오브젝트일 때만 유효. */
 	TSharedPtr<FJsonObject> Json;
+	/** 응답이 JSON 배열일 때만 채워진다(예: /api/history). */
+	TArray<TSharedPtr<FJsonValue>> JsonArray;
 	FText ErrorText;
 };
 

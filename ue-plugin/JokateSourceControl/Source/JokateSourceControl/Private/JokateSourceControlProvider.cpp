@@ -5,10 +5,14 @@
 #include "JokateHttp.h"
 #include "JokateSourceControlLog.h"
 #include "JokateSourceControlModule.h"
+#include "JokateSourceControlRevision.h"
 #include "JokateSourceControlUtils.h"
 
 #include "Async/Async.h"
 #include "Dom/JsonObject.h"
+#include "GenericPlatform/GenericPlatformHttp.h"
+#include "HAL/FileManager.h"
+#include "HAL/PlatformFileManager.h"
 #include "HAL/PlatformProcess.h"
 #include "ISourceControlModule.h"
 #include "Misc/Paths.h"
@@ -29,6 +33,43 @@
 namespace
 {
 	const FName JokateProviderName("Jokate");
+
+	/** 이 프로바이더가 실제로 처리하는 작업 이름. */
+	bool IsSupportedOperationName(const FName& InName)
+	{
+		return InName == "Connect"
+			|| InName == "UpdateStatus"
+			|| InName == "CheckIn"
+			|| InName == "Revert"
+			|| InName == "Delete"
+			|| InName == "MarkForAdd"
+			|| InName == "Copy";
+	}
+
+	/** 절대경로 목록 → Content 기준 rel 목록 (Content 밖 파일은 버린다). */
+	TArray<FString> ToRelList(const TArray<FString>& InFiles)
+	{
+		TArray<FString> Rels;
+		for (const FString& File : InFiles)
+		{
+			const FString Rel = JokateSourceControlUtils::ToContentRelative(JokateSourceControlUtils::NormalizeFilename(File));
+			if (!Rel.IsEmpty())
+			{
+				Rels.AddUnique(Rel);
+			}
+		}
+		return Rels;
+	}
+
+	TArray<TSharedPtr<FJsonValue>> ToJsonStrings(const TArray<FString>& InValues)
+	{
+		TArray<TSharedPtr<FJsonValue>> Out;
+		for (const FString& Value : InValues)
+		{
+			Out.Add(MakeShared<FJsonValueString>(Value));
+		}
+		return Out;
+	}
 }
 
 void FJokateSourceControlProvider::Init(bool bForceConnection)
@@ -143,7 +184,65 @@ TSharedRef<FJokateSourceControlState, ESPMode::ThreadSafe> FJokateSourceControlP
 	return NewState;
 }
 
-bool FJokateSourceControlProvider::RunUpdateStatus(const TArray<FString>& InFiles, FText& OutError)
+void FJokateSourceControlProvider::RunUpdateHistory(const TSharedRef<FJokateSourceControlState, ESPMode::ThreadSafe>& InState)
+{
+	if (InState->RelativePath.IsEmpty())
+	{
+		return;
+	}
+
+	const FString BaseUrl = FJokateSourceControlModule::Get().AccessSettings().GetBaseUrl();
+	const FString Path = FString::Printf(TEXT("/api/history?rel=%s&limit=50"),
+		*FGenericPlatformHttp::UrlEncode(InState->RelativePath));
+
+	const FJokateHttpResult Result = FJokateHttp::GetJson(BaseUrl, Path);
+	if (!Result.bOk)
+	{
+		return;
+	}
+
+	InState->History.Reset();
+	for (const TSharedPtr<FJsonValue>& Value : Result.JsonArray)
+	{
+		const TSharedPtr<FJsonObject>* Entry = nullptr;
+		if (!Value.IsValid() || !Value->TryGetObject(Entry) || Entry == nullptr || !Entry->IsValid())
+		{
+			continue;
+		}
+
+		TSharedRef<FJokateSourceControlRevision, ESPMode::ThreadSafe> Revision =
+			MakeShared<FJokateSourceControlRevision, ESPMode::ThreadSafe>();
+		Revision->Filename = InState->LocalFilename;
+		Revision->Rel = InState->RelativePath;
+
+		int32 SnapshotId = 0;
+		(*Entry)->TryGetNumberField(TEXT("id"), SnapshotId);
+		Revision->SnapshotId = SnapshotId;
+
+		int32 RevisionNumber = 0;
+		(*Entry)->TryGetNumberField(TEXT("revision"), RevisionNumber);
+		Revision->RevisionNumber = RevisionNumber;
+
+		int32 FileSize = 0;
+		(*Entry)->TryGetNumberField(TEXT("size"), FileSize);
+		Revision->FileSize = FileSize;
+
+		(*Entry)->TryGetStringField(TEXT("sha"), Revision->Sha);
+		(*Entry)->TryGetStringField(TEXT("message"), Revision->Description);
+		(*Entry)->TryGetStringField(TEXT("action"), Revision->Action);
+		Revision->RevisionLabel = FString::Printf(TEXT("#%d"), SnapshotId);
+
+		double Ts = 0.0;
+		if ((*Entry)->TryGetNumberField(TEXT("ts"), Ts) && Ts > 0.0)
+		{
+			Revision->Date = FDateTime::FromUnixTimestamp(static_cast<int64>(Ts));
+		}
+
+		InState->History.Add(Revision);
+	}
+}
+
+bool FJokateSourceControlProvider::RunUpdateStatus(const TArray<FString>& InFiles, FText& OutError, bool bUpdateHistory)
 {
 	check(IsInGameThread());
 
@@ -213,9 +312,199 @@ bool FJokateSourceControlProvider::RunUpdateStatus(const TArray<FString>& InFile
 		}
 	}
 
+	if (bUpdateHistory)
+	{
+		for (const FString& Rel : RequestedRels)
+		{
+			RunUpdateHistory(GetStateInternal(JokateSourceControlUtils::FromContentRelative(Rel)));
+		}
+	}
+
 	bStateChangedPending = true;
 	OnSourceControlStateChanged.Broadcast();
 	return true;
+}
+
+bool FJokateSourceControlProvider::RunCheckIn(const FSourceControlOperationRef& InOperation, const TArray<FString>& InFiles, FText& OutError)
+{
+	check(IsInGameThread());
+
+	TSharedRef<FCheckIn, ESPMode::ThreadSafe> CheckIn = StaticCastSharedRef<FCheckIn>(InOperation);
+	const FString Message = CheckIn->GetDescription().ToString().TrimStartAndEnd();
+	if (Message.IsEmpty())
+	{
+		OutError = LOCTEXT("EmptyMessage", "확정 메시지를 입력하세요.");
+		return false;
+	}
+
+	const TArray<FString> Rels = ToRelList(InFiles);
+
+	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("message"), Message);
+	Body->SetBoolField(TEXT("editor_managed"), true);
+	if (Rels.Num() > 0)
+	{
+		Body->SetArrayField(TEXT("only"), ToJsonStrings(Rels));
+	}
+
+	const FString BaseUrl = FJokateSourceControlModule::Get().AccessSettings().GetBaseUrl();
+	const FJokateHttpResult Result = FJokateHttp::PostJson(BaseUrl, TEXT("/api/confirm"), Body, FJokateHttp::LongTimeoutSeconds);
+	if (!Result.bOk || !Result.Json.IsValid())
+	{
+		OutError = Result.ErrorText.IsEmpty() ? LOCTEXT("ConfirmFailed", "확정에 실패했습니다.") : Result.ErrorText;
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject>* Snapshot = nullptr;
+	if (!Result.Json->TryGetObjectField(TEXT("snapshot"), Snapshot) || Snapshot == nullptr || !Snapshot->IsValid())
+	{
+		// 확정할 변경이 없었다 — 실패가 아니다.
+		InOperation->AddInfoMessge(LOCTEXT("NothingToConfirm", "확정할 변경이 없습니다."));
+		FText StatusError;
+		RunUpdateStatus(InFiles, StatusError);
+		return true;
+	}
+
+	int32 SnapshotId = 0;
+	(*Snapshot)->TryGetNumberField(TEXT("id"), SnapshotId);
+	int32 Cleared = 0;
+	Result.Json->TryGetNumberField(TEXT("cleared"), Cleared);
+
+	FFormatNamedArguments Args;
+	Args.Add(TEXT("Id"), FText::AsNumber(SnapshotId, &FNumberFormattingOptions::DefaultNoGrouping()));
+	Args.Add(TEXT("Cleared"), FText::AsNumber(Cleared, &FNumberFormattingOptions::DefaultNoGrouping()));
+	CheckIn->SetSuccessMessage(FText::Format(
+		LOCTEXT("ConfirmSuccess", "확정 버전 #{Id} · 작업 중 기록 {Cleared}개 정리"), Args));
+
+	// 확정된 파일은 모두 Clean 이다.
+	const FDateTime Now = FDateTime::Now();
+	for (const FString& File : InFiles)
+	{
+		TSharedRef<FJokateSourceControlState, ESPMode::ThreadSafe> State = GetStateInternal(File);
+		if (!State->RelativePath.IsEmpty())
+		{
+			State->State = EJokateFileState::Clean;
+			State->TimeStamp = Now;
+		}
+	}
+
+	HeadFix = FString::Printf(TEXT("#%d"), SnapshotId);
+	bStateChangedPending = true;
+	OnSourceControlStateChanged.Broadcast();
+	return true;
+}
+
+bool FJokateSourceControlProvider::RunRevert(const FSourceControlOperationRef& InOperation, const TArray<FString>& InFiles, FText& OutError)
+{
+	check(IsInGameThread());
+
+	TSharedRef<FRevert, ESPMode::ThreadSafe> Revert = StaticCastSharedRef<FRevert>(InOperation);
+	if (Revert->IsSoftRevert())
+	{
+		// 소프트 리버트는 파일을 건드리지 않는다 — 상태만 다시 읽는다.
+		return RunUpdateStatus(InFiles, OutError);
+	}
+
+	const TArray<FString> Rels = ToRelList(InFiles);
+	if (Rels.Num() == 0)
+	{
+		return RunUpdateStatus(InFiles, OutError);
+	}
+
+	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetArrayField(TEXT("assets"), ToJsonStrings(Rels));
+	Body->SetBoolField(TEXT("editor_managed"), true);
+
+	const FString BaseUrl = FJokateSourceControlModule::Get().AccessSettings().GetBaseUrl();
+	const FJokateHttpResult Result = FJokateHttp::PostJson(BaseUrl, TEXT("/api/discard"), Body, FJokateHttp::LongTimeoutSeconds);
+	if (!Result.bOk)
+	{
+		FString ServerError;
+		if (Result.Json.IsValid())
+		{
+			Result.Json->TryGetStringField(TEXT("error"), ServerError);
+
+			const TArray<TSharedPtr<FJsonValue>>* Locked = nullptr;
+			if (Result.Json->TryGetArrayField(TEXT("locked"), Locked) && Locked != nullptr && Locked->Num() > 0)
+			{
+				TArray<FString> LockedNames;
+				for (const TSharedPtr<FJsonValue>& Value : *Locked)
+				{
+					FString Name;
+					if (Value.IsValid() && Value->TryGetString(Name))
+					{
+						LockedNames.Add(Name);
+					}
+				}
+				if (LockedNames.Num() > 0)
+				{
+					InOperation->AddErrorMessge(FText::Format(
+						LOCTEXT("RevertLocked", "에디터가 쓰고 있어 되돌리지 못한 파일: {0}"),
+						FText::FromString(FString::Join(LockedNames, TEXT(", ")))));
+				}
+			}
+		}
+
+		OutError = !ServerError.IsEmpty()
+			? FText::FromString(ServerError)
+			: (Result.ErrorText.IsEmpty() ? LOCTEXT("RevertFailed", "변경을 버리지 못했습니다.") : Result.ErrorText);
+		return false;
+	}
+
+	FText StatusError;
+	RunUpdateStatus(InFiles, StatusError);
+	return true;
+}
+
+bool FJokateSourceControlProvider::RunDelete(const FSourceControlOperationRef& InOperation, const TArray<FString>& InFiles, FText& OutError)
+{
+	check(IsInGameThread());
+
+	IFileManager& FileManager = IFileManager::Get();
+	for (const FString& File : InFiles)
+	{
+		if (!FileManager.FileExists(*File))
+		{
+			continue;
+		}
+		// 읽기 전용이면 풀고 지운다.
+		FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*File, false);
+		if (!FileManager.Delete(*File, false, true, true))
+		{
+			OutError = FText::Format(LOCTEXT("DeleteFailed", "파일을 지우지 못했습니다: {0}"), FText::FromString(File));
+			return false;
+		}
+	}
+
+	FText StatusError;
+	if (!RunUpdateStatus(InFiles, StatusError))
+	{
+		OutError = StatusError;
+		return false;
+	}
+
+	// 확정된 적이 없어 데몬이 모르는 파일은 캐시에서 지운다.
+	for (const FString& File : InFiles)
+	{
+		const FString Key = JokateSourceControlUtils::NormalizeFilename(File);
+		if (const TSharedRef<FJokateSourceControlState, ESPMode::ThreadSafe>* Found = StateCache.Find(Key))
+		{
+			if ((*Found)->State == EJokateFileState::Untracked || (*Found)->State == EJokateFileState::Unknown)
+			{
+				StateCache.Remove(Key);
+			}
+		}
+	}
+
+	bStateChangedPending = true;
+	OnSourceControlStateChanged.Broadcast();
+	return true;
+}
+
+bool FJokateSourceControlProvider::RunTouchStatusOnly(const TArray<FString>& InFiles, FText& OutError)
+{
+	// Jokate 는 authored 폴더의 애셋을 자동으로 추적하므로 따로 등록할 게 없다.
+	return RunUpdateStatus(InFiles, OutError);
 }
 
 ECommandResult::Type FJokateSourceControlProvider::GetState(const TArray<FString>& InFiles, TArray<FSourceControlStateRef>& OutState, EStateCacheUsage::Type InStateCacheUsage)
@@ -276,10 +565,10 @@ ECommandResult::Type FJokateSourceControlProvider::Execute(const FSourceControlO
 	const FName OperationName = InOperation->GetName();
 	const TArray<FString> AbsoluteFiles = SourceControlHelpers::AbsoluteFilenames(InFiles);
 
-	if (OperationName != "Connect" && OperationName != "UpdateStatus")
+	if (!IsSupportedOperationName(OperationName))
 	{
 		InOperation->AddErrorMessge(FText::Format(
-			LOCTEXT("UnsupportedOperation", "Jokate 는 아직 '{0}' 작업을 지원하지 않습니다. 타임라인 웹에서 확정·되돌리기를 해 주세요."),
+			LOCTEXT("UnsupportedOperation", "Jokate 는 로컬 전용이라 '{0}' 작업을 지원하지 않습니다."),
 			FText::FromName(OperationName)));
 		InOperationCompleteDelegate.ExecuteIfBound(InOperation, ECommandResult::Failed);
 		return ECommandResult::Failed;
@@ -301,9 +590,27 @@ ECommandResult::Type FJokateSourceControlProvider::Execute(const FSourceControlO
 				RunUpdateStatus(TArray<FString>(), StatusError);
 			}
 		}
+		else if (OperationName == "UpdateStatus")
+		{
+			const bool bWantHistory = StaticCastSharedRef<FUpdateStatus>(InOperation)->ShouldUpdateHistory();
+			bSucceeded = RunUpdateStatus(AbsoluteFiles, Error, bWantHistory);
+		}
+		else if (OperationName == "CheckIn")
+		{
+			bSucceeded = RunCheckIn(InOperation, AbsoluteFiles, Error);
+		}
+		else if (OperationName == "Revert")
+		{
+			bSucceeded = RunRevert(InOperation, AbsoluteFiles, Error);
+		}
+		else if (OperationName == "Delete")
+		{
+			bSucceeded = RunDelete(InOperation, AbsoluteFiles, Error);
+		}
 		else
 		{
-			bSucceeded = RunUpdateStatus(AbsoluteFiles, Error);
+			// MarkForAdd·Copy — 데몬 호출 없이 상태만 갱신한다.
+			bSucceeded = RunTouchStatusOnly(AbsoluteFiles, Error);
 		}
 
 		if (!bSucceeded && !Error.IsEmpty())
@@ -338,8 +645,7 @@ ECommandResult::Type FJokateSourceControlProvider::Execute(const FSourceControlO
 
 bool FJokateSourceControlProvider::CanExecuteOperation(const FSourceControlOperationRef& InOperation) const
 {
-	const FName OperationName = InOperation->GetName();
-	return OperationName == "Connect" || OperationName == "UpdateStatus";
+	return IsSupportedOperationName(InOperation->GetName());
 }
 
 bool FJokateSourceControlProvider::CanCancelOperation(const FSourceControlOperationRef& InOperation) const

@@ -49,6 +49,11 @@ TSharedPtr<class ISourceControlRevision, ESPMode::ThreadSafe> FJokateSourceContr
 
 TSharedPtr<class ISourceControlRevision, ESPMode::ThreadSafe> FJokateSourceControlState::GetCurrentRevision() const
 {
+	// 이력은 최신순이므로 첫 항목이 마지막 확정 버전이다.
+	if (History.Num() > 0)
+	{
+		return History[0];
+	}
 	return nullptr;
 }
 
@@ -100,7 +105,7 @@ FText FJokateSourceControlState::GetDisplayTooltip() const
 	case EJokateFileState::Modified:
 		return LOCTEXT("Modified_Tooltip", "마지막 확정 이후 바뀐 애셋입니다.");
 	case EJokateFileState::Added:
-		return LOCTEXT("Added_Tooltip", "아직 한 번도 확정하지 않은 새 애셋입니다.");
+		return LOCTEXT("Added_Tooltip", "아직 한 번도 확정하지 않은 새 애셋입니다. 변경 버리기(Revert)를 하면 파일이 지워집니다.");
 	case EJokateFileState::Deleted:
 		return LOCTEXT("Deleted_Tooltip", "확정된 뒤 지워진 애셋입니다.");
 	case EJokateFileState::Missing:

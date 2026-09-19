@@ -52,7 +52,22 @@ private:
 	bool CheckConnection(FText& OutError);
 
 	/** 파일 목록의 상태를 데몬에서 받아 캐시에 반영한다(게임 스레드). 파일이 비면 전체. */
-	bool RunUpdateStatus(const TArray<FString>& InFiles, FText& OutError);
+	bool RunUpdateStatus(const TArray<FString>& InFiles, FText& OutError, bool bUpdateHistory = false);
+
+	/** 파일 하나의 확정 버전 이력을 GET /api/history 로 채운다. */
+	void RunUpdateHistory(const TSharedRef<FJokateSourceControlState, ESPMode::ThreadSafe>& InState);
+
+	/** Submit(확정) — POST /api/confirm */
+	bool RunCheckIn(const FSourceControlOperationRef& InOperation, const TArray<FString>& InFiles, FText& OutError);
+
+	/** Revert(변경 버리기) — POST /api/discard */
+	bool RunRevert(const FSourceControlOperationRef& InOperation, const TArray<FString>& InFiles, FText& OutError);
+
+	/** Delete — 디스크에서 지우고 상태 갱신 */
+	bool RunDelete(const FSourceControlOperationRef& InOperation, const TArray<FString>& InFiles, FText& OutError);
+
+	/** MarkForAdd·Copy — 데몬 호출 없이 상태만 갱신 */
+	bool RunTouchStatusOnly(const TArray<FString>& InFiles, FText& OutError);
 
 	TSharedRef<FJokateSourceControlState, ESPMode::ThreadSafe> GetStateInternal(const FString& InFilename);
 

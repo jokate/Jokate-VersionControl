@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "ISourceControlState.h"
 #include "ISourceControlRevision.h"
+#include "JokateSourceControlRevision.h"
 
 /** Jokate 데몬이 알려주는 파일 상태. */
 enum class EJokateFileState : uint8
@@ -73,6 +74,6 @@ public:
 	/** 마지막으로 상태를 갱신한 시각. */
 	FDateTime TimeStamp = FDateTime::Now();
 
-	/** 22c 에서 채운다. */
-	TArray<TSharedRef<class ISourceControlRevision, ESPMode::ThreadSafe>> History;
+	/** 확정 버전 이력 (최신순). UpdateStatus 의 ShouldUpdateHistory 가 참일 때 채운다. */
+	TArray<TSharedRef<FJokateSourceControlRevision, ESPMode::ThreadSafe>> History;
 };

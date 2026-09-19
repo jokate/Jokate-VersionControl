@@ -116,7 +116,19 @@ Jokate 를 언리얼의 **리비전 컨트롤(Revision Control)** 프로바이�
 1. 설치: `python -m jokate plugin-install <project>` — `ue-plugin/JokateSourceControl` 이 `<project>/Plugins/JokateSourceControl` 로 복사된다(기존 `Binaries`·`Intermediate` 는 유지).
 2. 빌드: 에디터를 닫고 `.uproject` 우클릭 > Generate project files 후 빌드하거나, 에디터 실행 시 "다시 빌드하시겠습니까" 창에서 예.
 3. 선택: 에디터 우하단(또는 상단) **리비전 컨트롤 > 리비전 컨트롤 연결**에서 프로바이더를 `Jokate` 로 고르고 포트(기본 8765)를 확인한다. 데몬이 꺼져 있으면 `start.bat` 또는 툴 메뉴 Jokate > 데몬 시작.
-4. 웹과 함께: 확정·되돌리기·히스토리는 지금은 타임라인 웹에서 한다(설정 패널의 '타임라인 열기' 버튼). 플러그인은 상태 표시와 연결 확인만 담당한다.
+4. 웹과 함께: 타임라인 웹(설정 패널의 '타임라인 열기' 버튼)에서는 전체 이력·복원 같은 더 넓은 작업을 한다.
+
+에디터 우클릭 메뉴(리비전 컨트롤)에서 되는 것:
+
+| 메뉴 | Jokate 동작 |
+|---|---|
+| Submit / 체크인 | 고른 애셋만 **확정**(`POST /api/confirm`). 메시지가 비면 거절하고, 끝나면 '확정 버전 #N · 작업 중 기록 k개 정리' 를 보여 준다. 확정할 변경이 없으면 성공 + 안내 메시지 |
+| Revert / 되돌리기 | **변경 버리기**(`POST /api/discard`) — 마지막 확정 상태로. 새 애셋(Added)을 되돌리면 파일이 지워진다. 에디터가 파일을 잡고 있으면 잠긴 목록을 오류로 알려 준다 |
+| Delete | 애셋 파일을 디스크에서 지우고 상태를 갱신한다(확정된 애셋은 '삭제됨(확정 전)', 한 번도 확정 안 한 애셋은 목록에서 사라짐) |
+| History | 그 애셋의 확정 버전 이력(`GET /api/history`)을 리비전 목록으로 보여 준다 |
+| Diff Against Depot | 마지막 확정 버전을 꺼내(`POST /api/extract`) 언리얼 내장 diff 창으로 현재 버전과 비교 |
+| Mark for Add / 이름 바꾸기·이동 | 따로 할 일 없음 — authored 폴더의 애셋은 자동으로 추적된다. 상태만 다시 읽는다 |
+| Sync / Get Latest, Check Out | **지원하지 않음** — Jokate 는 로컬 전용이라 잠금·동기화 개념이 없다(편집은 언제나 자유) |
 
 포트는 `<project>/.jokate/daemon.json` 이 있으면 그 값을 우선 쓰고, 없으면 `SourceControlSettings.ini` 의 `[JokateSourceControl.JokateSourceControlSettings] Port` 를 쓴다.
 
