@@ -1,0 +1,24 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1",
+	"FriendlyName": "Jokate Revision Control",
+	"Description": "Jokate 를 언리얼 리비전 컨트롤 프로바이더로 사용합니다 (로컬 데몬 HTTP 연동). Use the local Jokate daemon as an Unreal revision control provider.",
+	"Category": "Source Control",
+	"CreatedBy": "Jokate",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"EnabledByDefault": true,
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "JokateSourceControl",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}

@@ -19,6 +19,7 @@ jokate CLI
   python -m jokate gc <project> [--dry-run]         # 참조 없는 객체 삭제
   python -m jokate bridge-install <project>      # 에디터 브릿지 스크립트를 Content/Python 에 설치
   python -m jokate bridge-status <project>         # 브릿지 heartbeat 나이
+  python -m jokate plugin-install <project>        # 리비전 컨트롤 플러그인(C++)을 Plugins 에 설치
   python -m jokate watch <project> [--interval 2] [--debounce 5]        # 저장 감지 자동 스냅샷
   python -m jokate serve <project> [--port 8765]                        # 타임라인 웹 UI
 """
@@ -333,6 +334,16 @@ def cmd_bridge_install(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_plugin_install(a: argparse.Namespace) -> int:
+    from . import plugin as pluginmod
+    res = pluginmod.install(Path(a.project))
+    print(f"복사: {', '.join(res['copied'])} → {res['dest']}")
+    if res["kept"]:
+        print(f"유지: {', '.join(res['kept'])}")
+    print(pluginmod.HINT)
+    return 0
+
+
 def cmd_bridge_status(a: argparse.Namespace) -> int:
     from . import bridge
     from . import store as storemod
@@ -430,6 +441,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_gc)
     s = sub.add_parser("bridge-install"); s.add_argument("project"); s.set_defaults(fn=cmd_bridge_install)
     s = sub.add_parser("bridge-status"); s.add_argument("project"); s.set_defaults(fn=cmd_bridge_status)
+    s = sub.add_parser("plugin-install", help="에디터 리비전 컨트롤 플러그인을 <project>/Plugins 에 설치")
+    s.add_argument("project"); s.set_defaults(fn=cmd_plugin_install)
     s = sub.add_parser("watch"); s.add_argument("project")
     s.add_argument("--interval", type=float, default=2.0, help="폴링 주기(초)")
     s.add_argument("--debounce", type=float, default=5.0, help="마지막 변화 후 이만큼 조용하면 스냅샷(초)")

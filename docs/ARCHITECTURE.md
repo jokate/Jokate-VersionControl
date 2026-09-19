@@ -142,6 +142,22 @@ HTTP 는 항상 `threading.Thread` 에서 보내고 결과는 큐에 넣어 기�
 - 상단 **툴(Tools) > Jokate**: 브릿지 켜기/끄기, 데몬 시작·재시작, 타임라인 열기(웹), 지금 스냅샷, 상태 보기. 메뉴 등록은 `init_unreal.py` 의 `import jokate_bridge` 에서 항상 수행하고, 브릿지 틱은 `tool.json` 의 `autostart` 에 따른다(false 면 메뉴에서 켠다)
 - 콘텐츠 브라우저 우클릭 **Jokate** 에는 '직전 스냅샷과 비교(diff)' 가 추가됐다(HEAD 버전 ↔ 현재 파일). 모든 HTTP 는 워커 스레드, 모달은 틱에서만
 
+## 리비전 컨트롤 플러그인 (ue-plugin/JokateSourceControl)
+
+에디터 모듈 하나(`Type: Editor`, `LoadingPhase: Default`)로 구성한다.
+
+- `FJokateSourceControlModule` — `StartupModule` 에서 `IModularFeatures` 에 `"SourceControl"` 피처로 프로바이더를 등록하고 `ShutdownModule` 에서 `Close()` 후 해제한다. 설정 접근자(`AccessSettings`)를 갖는다
+- `FJokateSourceControlSettings` — 포트(기본 8765). `SourceControlHelpers::GetSettingsIni()` 의 `[JokateSourceControl.JokateSourceControlSettings]` 에 저장하고, `<ProjectDir>/.jokate/daemon.json` 의 `port` 가 있으면 그쪽을 우선한다
+- `FJokateSourceControlProvider` — `Init` 이 `GET /api/ping` 으로 `root` 가 이 프로젝트인지 확인해 `bAvailable` 을 정한다. `Execute` 는 이번 단계에서 `Connect`·`UpdateStatus` 만 처리하고 나머지는 '지원 안 함' 메시지와 함께 `Failed`. 체크아웃·체인지리스트는 쓰지 않는다(`UsesCheckout/UsesChangelists = false`, `UsesFileRevisions = true`)
+- `FJokateSourceControlState` — 절대경로 + `EJokateFileState`(Unknown/Clean/Modified/Added/Deleted/Untracked/Missing). `CanEdit` 은 항상 true(잠금 없음), `CanCheckIn/CanRevert` 는 Modified·Added·Deleted. 히스토리는 22c 에서 채운다
+- `JokateSourceControlUtils` — 절대경로 ↔ Content 기준 rel(슬래시 통일, Content 밖은 Untracked) 변환과 `/api/states` 응답 파싱
+
+### HTTP 스레드 정책
+
+`FJokateHttp` 는 `FHttpModule` 요청에 `SetDelegateThreadPolicy(EHttpRequestDelegateThreadPolicy::CompleteOnHttpThread)` 를 걸고 `FEvent` 로 기다린다. 완료 콜백이 게임 스레드 틱을 기다리지 않으므로 게임 스레드에서 동기 호출해도 데드락이 없다(기본 10초, 확정·버리기는 60초). `EConcurrency::Asynchronous` 로 들어온 `Execute` 는 스레드풀로 넘긴 뒤 `AsyncTask(ENamedThreads::GameThread)` 로 돌아와 상태 캐시 갱신과 완료 델리게이트를 호출한다. 상태 캐시(`TMap<절대경로, State>`)는 게임 스레드에서만 만지고, 변경은 `OnSourceControlStateChanged` 브로드캐스트(그리고 `Tick` 의 보류 플래그)로 알린다.
+
+`UpdateStatus` 흐름: 요청 파일 → Content 기준 rel → `POST /api/states {rels}` → 캐시 갱신 → 브로드캐스트. 파일 목록이 비면 `rels` 를 빈 배열로 보내 전체를 받는다.
+
 ## UE 패키지 헤더 포맷 메모
 
 `jokate/uasset.py` 를 읽으며 확인한 것들:
