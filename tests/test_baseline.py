@@ -103,9 +103,10 @@ def test_revert_to_baseline_clears_journal(project: Path) -> None:
     r = st.revert_to_baseline(["Foo/A.uasset"], check_editor=False)
     assert content.joinpath("A.uasset").read_bytes() == b"AAAA-v1"
     assert content.joinpath("B.uasset").read_bytes() == b"BBBB-v2"
-    # 되돌릴 애셋이 HEAD 그대로였으므로 실행 취소 지점은 없고 작업 중 기록은 전부 정리된다
-    assert r.written == 1 and r.undo is None and r.cleared == 2
-    assert st.journal() == [] and [s.role for s in st.log()] == ["fix"]
+    # 되돌릴 애셋이 HEAD 그대로였어도 그 HEAD 가 실행 취소 지점으로 남고 나머지는 정리된다
+    assert r.written == 1 and r.undo is not None and r.cleared >= 1
+    assert [s.id for s in st.journal()] == [r.undo.id]
+    assert [s.role for s in st.log()] == ["journal", "fix"]
     d = st.status()
     assert [n.rel for _, n in d.modified] == ["Foo/B.uasset"]
     st.close()

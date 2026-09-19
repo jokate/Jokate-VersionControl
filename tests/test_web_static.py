@@ -32,16 +32,41 @@ REQUIRED_IDS = [
     "optRowThumb",  # 행 썸네일 표시 체크박스
     "statsWrap",
     "statsMini",
-    "baseRef",      # '마지막으로 올린 #N 이후' 기준 표시
-    "hideAutoCb",   # 자동 저장 숨기기 토글
+    "baseRef",      # '마지막 확정 #N 이후' 기준 표시
+    "confirmBar",   # 확정 메시지 + 버튼 영역
+    "cmsg",         # 확정 메시지 입력
+    "confirmBtn",   # 큰 '확정' 버튼
+    "discardBtn",   # 보조 '변경 버리기' 버튼
+    "journalCard",  # '작업 중 기록' 서랍
+    "journalList",
+    "journalCount",
 ]
 
+# 21b 에서 사라진 요소들 (스냅샷 만들기 입력/버튼 · 자동 저장 숨기기 토글)
+REMOVED_IDS = ["msg", "mksnap", "hideAuto", "hideAutoCb"]
 
-def test_revert_and_polling_present(html: str) -> None:
-    assert "'/api/revert'" in html, "우클릭 되돌리기가 /api/revert 를 쓰지 않습니다"
-    assert "jokate.hideAuto" in html, "자동 저장 숨기기 localStorage 키가 없습니다"
+
+def test_discard_and_polling_present(html: str) -> None:
+    assert "'/api/discard'" in html, "변경 버리기가 /api/discard 를 쓰지 않습니다"
+    assert "'/api/confirm'" in html, "확정이 /api/confirm 을 쓰지 않습니다"
+    assert "/api/log?role=fix" in html, "확정 이력이 role=fix 로 불러오지 않습니다"
+    assert "/api/log?role=journal" in html, "작업 중 기록이 role=journal 로 불러오지 않습니다"
     assert "pollTick" in html and "document.hidden" in html, "5초 폴링/탭 숨김 처리가 없습니다"
-    assert "s.uploaded" in html, "타임라인의 '올림' 표시가 없습니다"
+    assert "loadJournal" in html, "작업 중 기록 갱신이 없습니다"
+
+
+def test_confirm_wording(html: str) -> None:
+    for word in ["확정 안 된 변경", "작업 중 기록", "확정 이력", "확정하면 지워집니다",
+                 "변경 버리기", "전부 확정", "확정 버전"]:
+        assert word in html, f"'{word}' 문구가 없습니다"
+    assert "되돌린 뒤 확정을 눌러야 새 버전이 됩니다" in html, "되돌리기 확인 모달 안내가 없습니다"
+    for gone in ["올릴 변경", "스냅샷 만들기", "자동 저장 숨기기", "올리지 않은 변경"]:
+        assert gone not in html, f"옛 문구 '{gone}' 가 남아 있습니다"
+
+
+@pytest.mark.parametrize("el_id", REMOVED_IDS)
+def test_removed_ids_absent(html: str, el_id: str) -> None:
+    assert f'id="{el_id}"' not in html, f"제거된 요소 id={el_id} 가 남아 있습니다"
 
 
 @pytest.mark.parametrize("el_id", REQUIRED_IDS)
@@ -50,7 +75,7 @@ def test_required_ids_present(html: str, el_id: str) -> None:
 
 
 def test_fold_toggle_buttons_present(html: str) -> None:
-    for target in ["stats", "changes", "tlcard", "hist"]:
+    for target in ["stats", "changes", "journal", "tlcard", "hist"]:
         assert f'data-fold="{target}"' in html, f"접기 토글(data-fold={target})이 없습니다"
 
 

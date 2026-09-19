@@ -85,6 +85,16 @@
   #changes td .rel, #detail td .rel { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #changes td:nth-child(4) { overflow:hidden; }
   #changes .badge { white-space:nowrap; }
+  #confirmBar { flex:0 0 auto; border-top:1px solid var(--line); padding:8px 12px; display:flex; flex-direction:column; gap:6px; background:linear-gradient(0deg, rgba(255,255,255,.03), transparent); }
+  #confirmBar input { width:100%; padding:6px 10px; font-size:12px; border-radius:8px; }
+  #confirmBar .brow { display:flex; gap:8px; }
+  #confirmBtn { flex:1; }
+  #journalCard { flex:0 0 auto; margin-top:8px; max-height:38vh; }
+  #journalCard > .ph b { color:var(--fg2); }
+  #journalList { overflow:auto; padding:4px 0 8px; }
+  #journalList .snap { padding-left:16px; opacity:.72; }
+  #journalList .snap::before, #journalList .snap::after { display:none; }
+  #journalList .snap:hover, #journalList .snap.sel { opacity:1; }
   #tlcard { flex:1 1 auto; min-height:0; }
   #timeline { overflow:auto; flex:1; padding:6px 0 12px; position:relative; }
 
@@ -130,8 +140,6 @@
   .snap.noise.sel { opacity:.9; }
   .hidden-noise { margin:4px 14px 4px 40px; padding:5px 10px; font-size:11px; color:var(--dim); border:1px dashed var(--line2); border-radius:8px; cursor:pointer; }
   .hidden-noise:hover { color:var(--fg2); border-color:var(--dim2); }
-  #hideAuto { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
-  #hideAuto input { accent-color:var(--acc); }
   .snap.flash { box-shadow:inset 0 0 0 2px var(--acc); border-radius:8px; animation:snapin .5s ease-out; }
   @keyframes snapin { from { transform:translateY(-4px); } to { transform:none; } }
   .snap .hits { font-size:11px; color:var(--acc2); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -330,8 +338,6 @@
 </div>
 <header>
   <div class="logo"><div class="mark">J</div><h1>Jokate</h1><span class="proj" id="proj">…</span></div>
-  <input id="msg" placeholder="스냅샷 메시지 — 예: 대시 공격 몽타주 연결" maxlength="200">
-  <button id="mksnap">스냅샷 만들기</button>
   <button id="reload" class="ghost">새로고침</button>
   <label id="showNoise"><input type="checkbox" id="showNoiseCb"> 리세이브 스냅샷 보기</label>
   <button id="viewBtn" class="ghost small">보기</button>
@@ -342,23 +348,31 @@
 <section id="statsWrap">
   <div class="ph"><span class="spacer"></span><button class="fold" data-fold="stats" title="요약 접기/펼치기">▾</button></div>
   <div id="stats">
-    <div class="stat hot"><div class="l">올릴 변경</div><div class="v" id="stChanges">–</div></div>
-    <div class="stat"><div class="l">스냅샷</div><div class="v" id="stSnaps">–</div></div>
+    <div class="stat hot"><div class="l">확정 안 된 변경</div><div class="v" id="stChanges">–</div></div>
+    <div class="stat"><div class="l">확정 버전</div><div class="v" id="stSnaps">–</div></div>
     <div class="stat"><div class="l">추적 애셋</div><div class="v" id="stAssets">–</div></div>
     <div class="stat"><div class="l">저장소</div><div class="v"><span id="stStore">–</span><button id="pruneBtn" class="ghost small mini" title="오래된 자동 스냅샷과 참조 없는 객체 정리">정리</button></div></div>
-    <div class="stat"><div class="l">마지막 스냅샷</div><div class="v" id="stLast">–</div></div>
+    <div class="stat"><div class="l">마지막 버전</div><div class="v" id="stLast">–</div></div>
   </div>
   <div id="statsMini"></div>
 </section>
 <main id="main">
   <div id="left">
     <div id="changes" class="card" data-list="changes">
-      <div class="ph"><b>현재 변경사항</b><span class="hint" id="baseRef">기준 확인 중…</span><span class="selcount"></span><span class="spacer"></span><button id="reloadStatus" class="ghost small">새로고침</button><button class="fold" data-fold="changes" title="접기/펼치기">▾</button></div>
+      <div class="ph"><b>확정 안 된 변경</b><span class="hint" id="baseRef">기준 확인 중…</span><span class="selcount"></span><span class="spacer"></span><button id="reloadStatus" class="ghost small">새로고침</button><button class="fold" data-fold="changes" title="접기/펼치기">▾</button></div>
       <div id="changesBody"><p class="dim" style="padding:12px 14px">불러오는 중…</p></div>
+      <div id="confirmBar">
+        <input id="cmsg" placeholder="확정 메시지 — 예: 대시 공격 몽타주 연결" maxlength="200">
+        <div class="brow"><button id="confirmBtn">전부 확정</button><button id="discardBtn" class="ghost">변경 버리기</button></div>
+      </div>
+    </div>
+    <div id="journalCard" class="card" style="display:none">
+      <div class="ph"><b>작업 중 기록</b><span class="hint" id="journalCount"></span><span class="spacer"></span><span class="hint">확정하면 지워집니다</span><button class="fold" data-fold="journal" title="접기/펼치기">▸</button></div>
+      <div id="journalList"></div>
     </div>
     <div id="hsplit" class="splitter row" tabindex="0" role="separator" aria-orientation="horizontal" aria-label="변경사항/타임라인 경계선"></div>
     <div id="tlcard" class="card">
-      <div class="ph"><b>타임라인</b><input id="q" placeholder="애셋·클래스·메시지 검색  /" maxlength="80"><button id="qclear" class="ghost small" style="display:none" title="검색 해제 (Esc)">✕</button><span class="hint" id="qinfo">라벨 = 밝은 점 · 자동 = 흐린 점</span><label class="hint" id="hideAuto" title="자동 저장 스냅샷을 숨깁니다"><input type="checkbox" id="hideAutoCb"> 자동 저장 숨기기</label><button class="fold" data-fold="tlcard" title="접기/펼치기">▾</button></div>
+      <div class="ph"><b>확정 이력</b><input id="q" placeholder="애셋·클래스·메시지 검색  /" maxlength="80"><button id="qclear" class="ghost small" style="display:none" title="검색 해제 (Esc)">✕</button><span class="hint" id="qinfo">확정 버전만 보입니다</span><button class="fold" data-fold="tlcard" title="접기/펼치기">▾</button></div>
       <div id="timeline"></div>
     </div>
   </div>
@@ -386,13 +400,11 @@
 <script>
 const KIND = {added:'추가', modified:'수정', resave:'리세이브', moved:'이동', deleted:'삭제'};
 const ORDER = ['modified','added','moved','deleted','resave'];
-let selected = null, selectedRel = null, headId = null, lastLog = [];
+let selected = null, selectedRel = null, headId = null, lastLog = [], journalLog = [];
 let tlSel = new Set(), tlAnchor = null;      // 타임라인 다중 선택 (Ctrl 토글 · Shift 범위)
 let searchHits = null, searchTimer = null;   // searchHits: Map<snapshot id, {matched, by}> · null = 검색 안 함
 const NOISE_KEY = 'jokate.showNoise';
 let showNoise = localStorage.getItem(NOISE_KEY) === '1';
-const HIDE_AUTO_KEY = 'jokate.hideAuto';
-let hideAuto = localStorage.getItem(HIDE_AUTO_KEY) === '1';
 const countOf = c => Object.values(c || {}).reduce((a, b) => a + b, 0);
 
 const $ = s => document.querySelector(s);
@@ -534,12 +546,12 @@ function applyInfo(i) {
     $('#proj').textContent = i.project;
     if (buildId === null) buildId = i.build;
     if (i.stale) showStale();
-    $('#stSnaps').textContent = i.snapshots;
+    $('#stSnaps').innerHTML = `${i.fixes ?? i.snapshots}<small>작업 중 기록 ${i.journal ?? 0}</small>`;
     $('#stAssets').innerHTML = `${i.assets}<small>authored</small>`;
     $('#stStore').innerHTML = `${fmtB(i.store_bytes)}<small>${i.objects}개</small>`;
     $('#stLast').innerHTML = i.last ? `<span style="font-size:15px">${esc(i.last.time.slice(5, 16))}</span><small>#${i.last.id}</small>` : '없음';
     if (Array.isArray(i.vendor)) VENDOR = i.vendor;
-    $('#baseRef').textContent = i.last_label ? `마지막으로 올린 #${i.last_label.id} 이후` : '아직 올린 적 없음';
+    $('#baseRef').textContent = i.last_label ? `마지막 확정 #${i.last_label.id} 이후` : '아직 확정한 적 없음';
     if (typeof applyFold === 'function') applyFold();   // 접힌 상태면 한 줄 요약 갱신
 }
 async function loadInfo() {
@@ -560,6 +572,16 @@ function paintSel(name) {
   if (cnt) cnt.textContent = s.size ? `${s.size}개 선택` : '';
   const cb = listEl(name).querySelector('.selall');
   if (cb) { cb.checked = rows.length > 0 && s.size === rows.length; cb.indeterminate = s.size > 0 && s.size < rows.length; }
+  if (name === 'changes') updateConfirmBar();
+}
+// '확정' / '변경 버리기' 버튼 문구는 선택 상태를 따른다
+function updateConfirmBar() {
+  const b = $('#confirmBtn'), d = $('#discardBtn');
+  if (!b || !d) return;
+  const n = sel.changes.size, total = listRows('changes').length;
+  b.textContent = n ? `선택한 ${n}개 확정` : '전부 확정';
+  d.textContent = n ? `선택한 ${n}개 변경 버리기` : '변경 버리기';
+  b.disabled = d.disabled = !total;
 }
 function rowClick(name, tr, e) {
   activeList = name;
@@ -622,14 +644,14 @@ document.addEventListener('scroll', closeMenu, true);
 function menuFor(name) {
   const rels = [...sel[name]], n = rels.length;
   if (name === 'changes') return [
-    {ic:'⬆', label: `선택한 것만 올리기 (${n})`, disabled: !n, run: () => snapFlow(rels)},
-    {ic:'⏫', label: '전부 올리기', run: () => snapFlow([])},
+    {ic:'⬆', label: `선택한 것만 확정 (${n})`, disabled: !n, run: () => confirmFlow(rels)},
+    {ic:'⏫', label: '전부 확정', run: () => confirmFlow([])},
     '-',
-    {ic:'↩', label: `선택한 것을 마지막으로 올린 상태로 되돌리기 (${n})`, disabled: !n, run: () => restoreFlow('base', rels)},
+    {ic:'↩', label: `선택한 변경 버리기 (${n})`, disabled: !n, run: () => restoreFlow('base', rels)},
   ];
   return [
-    {ic:'↩', label: `선택한 애셋을 이 시점(#${selected})으로 되돌리기 (${n})`, disabled: !n || selected == null, run: () => restoreFlow(selected, rels)},
-    {ic:'⟲', label: `이 스냅샷(#${selected}) 전체로 되돌리기`, disabled: selected == null, run: () => restoreFlow(selected, [])},
+    {ic:'↩', label: `선택한 애셋을 이 버전(#${selected})으로 되돌리기 (${n})`, disabled: !n || selected == null, run: () => restoreFlow(selected, rels)},
+    {ic:'⟲', label: `이 버전(#${selected}) 전체로 되돌리기`, disabled: selected == null, run: () => restoreFlow(selected, [])},
   ];
 }
 $('#changes').oncontextmenu = e => {
@@ -645,8 +667,8 @@ $('#modal').onmousedown = e => { if (e.target === $('#modal')) closeModal(); };
 function promptMessage(title, hint) {
   return new Promise(res => {
     openModal(`<h3>${esc(title)}</h3><div class="hint">${esc(hint)}</div>
-      <input id="mmsg" placeholder="스냅샷 메시지" maxlength="200" value="${esc($('#msg').value)}">
-      <div class="btns"><button id="mcancel" class="ghost">취소</button><button id="mok">올리기</button></div>`);
+      <input id="mmsg" placeholder="확정 메시지" maxlength="200" value="${esc($('#cmsg').value)}">
+      <div class="btns"><button id="mcancel" class="ghost">취소</button><button id="mok">확정</button></div>`);
     const inp = $('#mmsg'); inp.focus();
     const done = v => { closeModal(); res(v); };
     $('#mcancel').onclick = () => done(null);
@@ -679,16 +701,44 @@ document.addEventListener('keydown', e => {
 async function loadLog() {
   status('불러오는 중…');
   try {
-    lastLog = await api('/api/log');
+    lastLog = await api('/api/log?role=fix');
     headId = lastLog.length ? Math.max(...lastLog.map(s => s.id)) : null;
     renderTimeline();
-    status(`스냅샷 ${lastLog.length}개`);
+    status(`확정 버전 ${lastLog.length}개`);
+    loadJournal();
     loadInfo();
   } catch (e) { status('오류: ' + e.message); }
 }
+// 작업 중 기록(journal) 서랍 — 확정하면 지워지는 자동 저장·되돌리기 기록
+async function loadJournal() {
+  try { journalLog = await api('/api/log?role=journal'); }
+  catch (e) { journalLog = []; }
+  renderJournal();
+}
+function renderJournal() {
+  const card = $('#journalCard'), list = $('#journalList');
+  card.style.display = journalLog.length ? '' : 'none';
+  if (!journalLog.length) { list.innerHTML = ''; return; }
+  const back = journalLog.filter(s => /롤백|되돌/.test(s.message || '')).length;
+  $('#journalCount').textContent = `자동 저장 ${journalLog.length - back} · 되돌리기 ${back}`;
+  list.innerHTML = '';
+  for (const s of journalLog) {
+    const div = document.createElement('div');
+    div.className = 'snap auto' + (s.id === selected ? ' sel' : '');
+    div.dataset.id = s.id;
+    div.innerHTML = `<div class="msg"><span class="id">#${s.id}</span>${esc(s.message || '자동 저장')}</div>
+      <div class="meta">${esc(s.time)} · ${s.total}개 추적</div><div class="counts">${pills(s.counts)}</div>`;
+    div.onclick = () => select(s.id);
+    div.oncontextmenu = e => {
+      e.preventDefault();
+      openMenu(e.clientX, e.clientY, [{ic:'⟲', label:`이 시점(#${s.id})으로 되돌리기`, run: () => restoreFlow(s.id, [])}]);
+    };
+    list.appendChild(div);
+  }
+}
 function renderTimeline() {
   const tl = $('#timeline');
-  tl.innerHTML = lastLog.length ? '' : '<div class="empty" style="padding:30px;text-align:center" ><div class="dim">아직 스냅샷이 없습니다<br><span class="hint">위에서 메시지를 적고 "스냅샷 만들기"</span></div></div>';
+  tl.innerHTML = lastLog.length ? '' : '<div class="empty" style="padding:30px;text-align:center" ><div class="dim">아직 확정한 버전이 없습니다<br><span class="hint">위 카드에서 메시지를 적고 "전부 확정"</span></div></div>';
   if (searchHits && !searchHits.size) tl.innerHTML = '<div class="empty" style="padding:30px;text-align:center"><div class="dim">일치하는 스냅샷 없음</div></div>';
   let hidden = [];
   const flush = () => {
@@ -702,14 +752,13 @@ function renderTimeline() {
   for (const s of lastLog) {
     const hit = searchHits ? searchHits.get(s.id) : null;
     if (searchHits && !hit) continue;
-    if (!searchHits && hideAuto && s.kind === 'auto' && s.id !== selected) continue;
     if (!searchHits && s.all_noise && !showNoise && s.id !== selected) { hidden.push(s.id); continue; }
     flush();
     const div = document.createElement('div');
     div.className = `snap ${s.kind}` + (s.all_noise ? ' noise' : '') + (s.id === selected ? ' sel' : '')
       + (tlSel.has(s.id) ? ' msel' : '');
     div.dataset.id = s.id;
-    div.innerHTML = `<div class="msg"><span class="id">#${s.id}</span>${esc(s.message || (s.kind === 'auto' ? '자동 저장' : ''))}${s.all_noise ? ' <span class="badge noise">리세이브만</span>' : ''}${s.uploaded ? ` <span class="badge" style="--h:150">올림 ${countOf(s.counts)}개</span>` : ''}</div>
+    div.innerHTML = `<div class="msg"><span class="id">#${s.id}</span>${esc(s.message || (s.kind === 'auto' ? '자동 저장' : ''))}${s.all_noise ? ' <span class="badge noise">리세이브만</span>' : ''}${s.uploaded ? ` <span class="badge" style="--h:150">확정 ${countOf(s.counts)}개</span>` : ''}</div>
       <div class="meta">${esc(s.time)} · ${s.total}개 추적</div>
       <div class="counts">${pills(s.counts)}</div><div>${badges(s.by_class)}</div>` + hitsHtml(hit);
     div.onclick = e => snapClick(s.id, e);
@@ -872,7 +921,7 @@ async function loadStatus() {
     const total = rs.length;
     $('#stChanges').innerHTML = total ? `${total}<small>${countsText(d.counts)}</small>` : '0<small>깨끗함</small>';
     if (typeof applyFold === 'function') applyFold();   // 접힌 상태면 한 줄 요약 갱신
-    if (!total) { body.innerHTML = '<div class="empty" style="padding:24px;text-align:center"><div class="dim">✓ 올릴 변경 없음</div></div>'; sel.changes.clear(); paintSel('changes'); return; }
+    if (!total) { body.innerHTML = '<div class="empty" style="padding:24px;text-align:center"><div class="dim">✓ 확정 안 된 변경 없음</div></div>'; sel.changes.clear(); paintSel('changes'); return; }
     body.innerHTML = `<div class="sum">${pills(d.counts)} &nbsp;${badges(d.by_class)}</div>` + diffTable(d, 'changes', false, 'rel');
     bindList('changes');
   } catch (e) { body.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
@@ -1099,19 +1148,22 @@ async function uediffFlow(rel, aSha, bSha) {
   }
 }
 
-// ---- 올리기 ----
-async function snapFlow(only) {
-  const message = await promptMessage(only.length ? `선택한 ${only.length}개만 올리기` : '전부 올리기',
-    only.length ? only.join(', ') : '현재 변경사항 전체를 라벨 스냅샷으로 만듭니다.');
-  if (!message) return;
-  status('스냅샷 만드는 중…');
+// ---- 확정 ----
+async function confirmFlow(only) {
+  let message = $('#cmsg').value.trim();
+  if (!message) {
+    message = await promptMessage(only.length ? `선택한 ${only.length}개만 확정` : '전부 확정',
+      only.length ? only.join(', ') : '확정 안 된 변경 전체를 새 확정 버전으로 만듭니다.');
+    if (!message) return;
+  }
+  status('확정하는 중…');
   try {
-    const r = await api('/api/snap', {method: 'POST', headers: JSONH, body: JSON.stringify({message, only})});
-    $('#msg').value = '';
+    const r = await api('/api/confirm', {method: 'POST', headers: JSONH, body: JSON.stringify({message, only})});
+    $('#cmsg').value = '';
     await loadLog(); await loadStatus();
-    if (r.snapshot) { toast(`#${r.snapshot.id} 올림 · ${countsText(r.diff.counts)}`); await select(r.snapshot.id); }
-    else toast('선택한 애셋에 변경이 없어 스냅샷을 만들지 않았습니다', true);
-    status(`스냅샷 ${headId != null ? '#' + headId + ' 까지' : '없음'}`);
+    if (r.snapshot) { toast(`#${r.snapshot.id} 확정 · 작업 중 기록 ${r.cleared || 0}개 정리`); await select(r.snapshot.id); }
+    else toast('선택한 애셋에 변경이 없어 확정하지 않았습니다', true);
+    status(`확정 ${headId != null ? '#' + headId + ' 까지' : '없음'}`);
   } catch (e) { toast('오류: ' + e.message, true); status('오류: ' + e.message); }
 }
 
@@ -1119,9 +1171,9 @@ async function snapFlow(only) {
 function refList(title, xs) {
   return `<div class="err"><b>경고: ${esc(title)} (${xs.length})</b><br>` + xs.map(x => `! ${esc(x.rel)} → ${esc(x.dep)}`).join('<br>') + '</div>';
 }
-// id === 'base' 면 baseline(마지막으로 올린 상태) 되돌리기 — /api/revert
-const rUrl = id => id === 'base' ? '/api/revert' : '/api/restore/' + id;
-const rTitle = id => id === 'base' ? '마지막으로 올린 상태로 되돌리기' : `#${id} 로 되돌리기`;
+// id === 'base' 면 변경 버리기(마지막 확정 상태로) — /api/discard
+const rUrl = id => id === 'base' ? '/api/discard' : '/api/restore/' + id;
+const rTitle = id => id === 'base' ? '변경 버리기 (마지막 확정 상태로)' : `#${id} 버전으로 되돌리기`;
 async function restoreFlow(id, assets) {
   const scope = assets.length ? `선택 ${assets.length}개` : '전체';
   openModal(`<h3>${esc(rTitle(id))} (${esc(scope)})</h3><p class="dim">계산 중…</p>`);
@@ -1134,13 +1186,13 @@ async function restoreFlow(id, assets) {
     return;
   }
   const n = rows(p.diff).length;
-  let html = `<h3>${esc(id === 'base' ? rTitle(id) : `#${id} ${p.snapshot.message || '자동 저장'} 로 되돌리기`)} <span class="dim" style="font-weight:500">(${esc(scope)})</span></h3>
-    <div class="dim">${esc(p.snapshot.time)} · 현재 → ${esc(id === 'base' ? '올린 상태' : '#' + id)}</div><div class="bar" style="margin:8px 0">${pills(p.diff.counts)}</div>` + diffTable(p.diff, null);
+  let html = `<h3>${esc(id === 'base' ? rTitle(id) : `#${id} ${p.snapshot.message || '자동 저장'} 버전으로 되돌리기`)} <span class="dim" style="font-weight:500">(${esc(scope)})</span></h3>
+    <div class="dim">${esc(p.snapshot.time)} · 현재 → ${esc(id === 'base' ? '마지막 확정 상태' : '#' + id)}</div><div class="bar" style="margin:8px 0">${pills(p.diff.counts)}</div>` + diffTable(p.diff, null);
   if (p.dependents.length) html += refList('롤백으로 사라지는 애셋을 참조', p.dependents);
   if (p.broken.length) html += refList('깨질 참조', p.broken);
   if (n && !p.dependents.length && !p.broken.length) html += '<p class="ok">✓ 참조 검산: 이상 없음</p>';
-  html += '<div class="note">🛡 되돌릴 애셋의 현재 상태만 안전 스냅샷으로 남습니다. 다른 애셋의 올리지 않은 변경은 그대로 유지됩니다.</div>';
-  html += `<div id="restoreErr"></div><div class="btns"><button id="rcancel" class="ghost">취소</button><button id="rok" class="danger" ${n ? '' : 'disabled'}>${n ? `되돌리기 (${n}개 변경)` : '변경 없음'}</button></div>`;
+  html += '<div class="note">🛡 되돌릴 애셋의 현재 상태만 실행 취소 지점으로 남습니다. 다른 애셋의 확정 안 된 변경은 그대로 유지됩니다.' + (id === 'base' ? '' : '<br>되돌린 결과는 <b>확정 안 된 변경</b>으로 나타납니다 — 되돌린 뒤 확정을 눌러야 새 버전이 됩니다.') + '</div>';
+  html += `<div id="restoreErr"></div><div class="btns"><button id="rcancel" class="ghost">취소</button><button id="rok" class="danger" ${n ? '' : 'disabled'}>${n ? (id === 'base' ? `변경 버리기 (${n}개)` : `되돌리기 (${n}개 변경)`) : '변경 없음'}</button></div>`;
   openModal(html);
   $('#rcancel').onclick = closeModal;
   $('#rok').onclick = () => applyRestore(id, assets, false);
@@ -1151,10 +1203,16 @@ async function applyRestore(id, assets, discard) {
   try {
     const r = await api(rUrl(id), {method: 'POST', headers: JSONH, body: JSON.stringify({assets, discard_dirty: discard})});
     closeModal();
-    const safetyTag = (r.safety_created === false) ? '되돌리기 전 상태' : '안전 스냅샷';
-    toast(`롤백 완료 #${r.result.id} · ${safetyTag} #${r.safety.id} · 복사 ${r.written} · 삭제 ${r.deleted}`,
-      false, {label: '실행 취소', ms: 10000, run: () => undoRestore(r.safety.id, assets)});
-    await loadLog(); await loadStatus(); await select(r.result.id);
+    if (id === 'base') {
+      const undo = r.undo ? {label: '실행 취소', ms: 10000, run: () => undoRestore(r.undo.id, assets)} : null;
+      toast(`변경 ${r.written + r.deleted}개 버림 · 작업 중 기록 ${r.cleared || 0}개 정리`, false, undo);
+    } else {
+      const safetyTag = (r.safety_created === false) ? '되돌리기 전 상태' : '실행 취소 지점';
+      toast(`되돌리기 완료 #${r.result.id} · ${safetyTag} #${r.safety.id} · 복사 ${r.written} · 삭제 ${r.deleted}`,
+        false, {label: '실행 취소', ms: 10000, run: () => undoRestore(r.safety.id, assets)});
+    }
+    await loadLog(); await loadStatus();
+    if (r.result) await select(r.result.id);
   } catch (e) {
     const dirty = (e.status === 409 && e.body && Array.isArray(e.body.dirty)) ? e.body.dirty : [];
     const locked = (e.status === 409 && e.body && Array.isArray(e.body.locked)) ? e.body.locked : [];
@@ -1166,7 +1224,7 @@ async function applyRestore(id, assets, discard) {
         dirty.map(x => `<li>${esc(x)}</li>`).join('') + `</ul><div class="btns"><button id="rdiscard" class="danger">저장 안 한 변경 버리고 진행</button></div></div>`;
       $('#rdiscard').onclick = () => applyRestore(id, assets, true);
     } else box.innerHTML = `<div class="err">${esc(e.message)}</div>`;
-    btn.disabled = false; btn.textContent = '되돌리기';
+    btn.disabled = false; btn.textContent = id === 'base' ? '변경 버리기' : '되돌리기';
   }
 }
 
@@ -1188,7 +1246,7 @@ async function undoRestore(safetyId, assets) {
 const LAYOUT_KEY = 'jokate.layout.v1';
 const LAYOUT_DEFAULT = () => ({
   leftW: 380, changesH: 300, histH: 300,
-  folds: {stats: false, changes: false, tlcard: false, hist: false},
+  folds: {stats: false, changes: false, tlcard: false, hist: false, journal: true},
   full: false,
   density: 'normal', verThumb: 156, rowThumb: true,
 });
@@ -1239,9 +1297,10 @@ function applyFold() {
   if (f.stats) {
     const t = +($('#stChanges').textContent.match(/\d+/) || [0])[0] || 0;
     const sn = $('#stSnaps').textContent, st = $('#stStore').querySelector ? $('#stStore').textContent : '';
-    $('#statsMini').textContent = `올릴 변경 ${t} · 스냅샷 ${sn} · 저장소 ${st}`;
+    $('#statsMini').textContent = `확정 안 된 변경 ${t} · 확정 버전 ${sn.replace(/\s+/g, ' ')} · 저장소 ${st}`;
   }
   $('#changes').classList.toggle('folded', !!f.changes);
+  $('#journalCard').classList.toggle('folded', f.journal !== false);
   $('#tlcard').classList.toggle('folded', !!f.tlcard);
   $('#detail').classList.toggle('histfold', !!f.hist);
 }
@@ -1341,19 +1400,9 @@ window.addEventListener('resize', () => { layout.state = clampLayout(layout.stat
 applyLayout();
 
 // ---- 헤더 ----
-$('#mksnap').onclick = async () => {
-  const message = $('#msg').value.trim();
-  if (!message) { status('메시지를 입력하세요'); $('#msg').focus(); return; }
-  $('#mksnap').disabled = true; status('스냅샷 만드는 중…');
-  try {
-    const r = await api('/api/snap', {method: 'POST', headers: JSONH, body: JSON.stringify({message})});
-    $('#msg').value = '';
-    await loadLog(); await loadStatus();
-    if (r.snapshot) { await select(r.snapshot.id); status(`#${r.snapshot.id} 생성 · ${countsText(r.diff.counts)} · 새 객체 ${r.stored}`); toast(`#${r.snapshot.id} 스냅샷 생성`); }
-  } catch (e) { status('오류: ' + e.message); }
-  finally { $('#mksnap').disabled = false; }
-};
-$('#msg').onkeydown = e => { if (e.key === 'Enter') $('#mksnap').click(); };
+$('#confirmBtn').onclick = () => confirmFlow([...sel.changes]);
+$('#discardBtn').onclick = () => restoreFlow('base', [...sel.changes]);
+$('#cmsg').onkeydown = e => { if (e.key === 'Enter') $('#confirmBtn').click(); };
 $('#reload').onclick = () => { loadLog(); loadStatus(); };
 $('#reloadStatus').onclick = loadStatus;
 setInterval(loadStatus, 30000);
@@ -1400,14 +1449,6 @@ $('#dstop').onclick = async () => {
 };
 setInterval(loadDaemon, 10000);
 
-// ---- 자동 저장 숨기기 ----
-$('#hideAutoCb').checked = hideAuto;
-$('#hideAutoCb').onchange = e => {
-  hideAuto = e.target.checked;
-  localStorage.setItem(HIDE_AUTO_KEY, hideAuto ? '1' : '0');
-  renderTimeline();
-};
-
 // ---- 자동 갱신 (5초 폴링 · 탭이 숨겨지면 쉬다) ----
 let pollSeen = null;
 function flashTop() {
@@ -1432,8 +1473,9 @@ async function pollTick() {
       if (lastId !== pollSeen.lastId) flashTop();
     }
     if (i.pending !== pollSeen.pending) await loadStatus();
+    if (i.journal !== pollSeen.journal) await loadJournal();
   }
-  pollSeen = {snapshots: i.snapshots, lastId, pending: i.pending};
+  pollSeen = {snapshots: i.snapshots, lastId, pending: i.pending, journal: i.journal};
 }
 setInterval(pollTick, 5000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) pollTick(); });

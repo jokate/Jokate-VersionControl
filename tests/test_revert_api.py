@@ -110,5 +110,5 @@ def test_client_revert_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     jc.revert_preview("http://x", ["Foo/A.uasset", "Foo/B.uasset"])
     assert seen[-1][0].startswith("/api/revert?asset=") and seen[-1][1] is None
     assert seen[-1][0].count("asset=") == 2
-    assert "마지막으로 올린 상태로 되돌립니다" in jc.format_preview(
+    assert "마지막 확정 상태로 되돌립니다" in jc.format_preview(
         {"snapshot": {"id": 0, "message": "올린 상태(baseline)"}, "diff": {"counts": {}}})

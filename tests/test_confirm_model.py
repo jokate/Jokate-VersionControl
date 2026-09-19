@@ -173,14 +173,37 @@ def test_discard_leaves_single_undo_point(project: Path) -> None:
     st.close()
 
 
-def test_discard_without_new_safety_has_no_undo(project: Path) -> None:
+def test_discard_without_new_safety_keeps_head_as_undo(project: Path) -> None:
+    """안전 스냅샷을 새로 만들지 않아도(HEAD 가 곧 버리기 직전 상태) 실행 취소 지점은 남는다."""
     st = _st(project)
     st.confirm("처음 확정")
     write(st, "A.uasset", b"AAAA-v2")
     st.snap("")                      # HEAD 가 곧 되돌리기 직전 상태
     r = st.revert_to_baseline(["Foo/A.uasset"], check_editor=False)
-    assert r.undo is None and r.safety_created is False
-    assert st.journal() == [] and r.cleared >= 1
+    assert r.safety_created is False and r.undo is not None
+    assert [s.id for s in st.journal()] == [r.undo.id]   # 실행 취소 지점 하나만 남는다
+    st.apply_restore(st.plan_restore(r.undo.id, ["Foo/A.uasset"]), check_editor=False)
+    assert (st.cfg.content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v2"
+    st.close()
+
+
+def test_discard_undo_points_to_fix_when_tree_matches(project: Path) -> None:
+    """버리기 직전 상태가 이미 확정 버전 트리에 있으면 undo 는 그 fix 이고 복원도 된다."""
+    st = _st(project)
+    st.confirm("v1")                                   # fix: A=v1
+    write(st, "A.uasset", b"AAAA-v2")
+    st.confirm("v2")                                   # fix: A=v2
+    fix_v1 = st.fix_log()[-1]
+    # 과거 확정 버전으로 되돌린다 → 디스크는 v1, HEAD 는 journal(트리가 fix v1 과 같다)
+    st.apply_restore(st.plan_restore(fix_v1.id, ["Foo/A.uasset"]), check_editor=False)
+    assert (st.cfg.content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v1"
+    r = st.revert_to_baseline(["Foo/A.uasset"], check_editor=False)   # 되돌린 것을 다시 버린다
+    assert (st.cfg.content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v2"
+    assert r.safety_created is False
+    assert r.undo is not None and r.undo.id == fix_v1.id and r.undo.role == "fix"
+    assert st.journal() == []                          # 작업 중 기록은 전부 정리됐다
+    st.apply_restore(st.plan_restore(r.undo.id, ["Foo/A.uasset"]), check_editor=False)
+    assert (st.cfg.content / "Foo" / "A.uasset").read_bytes() == b"AAAA-v1"
     st.close()
 
 

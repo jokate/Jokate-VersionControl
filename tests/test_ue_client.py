@@ -90,9 +90,9 @@ def test_head_and_status(base):
 
 def test_snap_only_roundtrip(base):
     CALLS.clear()
-    code, j = jc.snap_only(base, "에디터에서 올림: A 1개", ["Foo/A.uasset"])
+    code, j = jc.snap_only(base, "에디터에서 확정: A 1개", ["Foo/A.uasset"])
     assert code == 200 and j["snapshot"]["id"] == 8
-    assert CALLS[-1] == ("/api/snap", {"message": "에디터에서 올림: A 1개", "only": ["Foo/A.uasset"]})
+    assert CALLS[-1] == ("/api/snap", {"message": "에디터에서 확정: A 1개", "only": ["Foo/A.uasset"]})
 
 
 def test_restore_409_then_discard(base):
@@ -120,7 +120,7 @@ def test_preview_change_count():
 def test_format_preview():
     text = jc.format_preview(PREVIEW, 7)
     lines = text.splitlines()
-    assert lines[0] == "#7 몬스터 밸런스 상태로 되돌립니다"
+    assert lines[0] == "#7 몬스터 밸런스 버전으로 되돌립니다"
     assert lines[1] == "수정 1 · 부활 1 · 이동 1 · 삭제 1 · 리세이브만 1"
     assert "M Blueprint/BP_Monster.uasset" in lines
     assert "M Blueprint/BP_Noise.uasset (리세이브만)" in lines
@@ -128,8 +128,10 @@ def test_format_preview():
     assert "R A/Old.uasset → A/New.uasset" in lines
     assert "D Blueprint/BP_Gone.uasset" in lines
     assert "참조 경고 2건" in lines
-    assert lines[-1] == ("되돌릴 애셋의 현재 상태만 안전 스냅샷으로 남습니다. "
-                         "다른 애셋의 올리지 않은 변경은 그대로 유지됩니다.")
+    assert lines[-2] == ("되돌릴 애셋의 현재 상태만 실행 취소 지점으로 남습니다. "
+                         "다른 애셋의 확정 안 된 변경은 그대로 유지됩니다.")
+    # 과거 버전으로 되돌린 결과는 '확정 안 된 변경' 이라는 안내
+    assert lines[-1] == "되돌린 결과는 '확정 안 된 변경' 으로 나타납니다 — 되돌린 뒤 확정을 눌러야 새 버전이 됩니다."
 
 
 def test_format_preview_row_limit():
@@ -144,10 +146,11 @@ def test_format_blocked_and_result():
     assert "dirty 패키지 있음" in b and "저장 안 된 패키지 12개:" in b
     assert b.count("/Game/Foo/A") == 10 and "… 외 2개" in b
     r = jc.format_result({"ok": True, "result": {"id": 9}, "safety": {"id": 8}, "written": 3, "deleted": 1})
-    assert r == "롤백 완료 #9 · 안전 스냅샷 #8 · 복사 3 · 삭제 1"
-    r2 = jc.format_result({"ok": True, "result": {"id": 9}, "safety": {"id": 8}, "written": 3, "deleted": 1,
-                           "safety_created": False})
-    assert r2 == "롤백 완료 #9 · 되돌리기 전 상태 #8 · 복사 3 · 삭제 1"
+    assert r == "되돌리기 완료 #9 · 실행 취소 지점 #8 · 복사 3 · 삭제 1"
+    # 변경 버리기 응답에는 undo 가 온다 — 그쪽을 실행 취소 지점으로 쓴다
+    r2 = jc.format_result({"ok": True, "result": {"id": 9}, "safety": {"id": 8}, "undo": {"id": 5},
+                           "written": 3, "deleted": 1, "safety_created": False})
+    assert r2 == "되돌리기 완료 #9 · 실행 취소 지점 #5 · 복사 3 · 삭제 1"
 
 
 def test_connection_refused():

@@ -433,15 +433,37 @@ class Store:
     def revert_to_baseline(self, assets: list[str] | None = None, **kw) -> "RestoreResult":
         """변경 버리기: 마지막 확정 상태로 되돌리고 작업 중 기록을 정리한다.
 
-        되돌리기 전 상태를 담은 안전 스냅샷 하나만 '실행 취소 지점'(undo)으로 남기고 나머지
-        journal(이번 되돌리기 결과 스냅샷 포함)은 지운다. 안전 스냅샷이 새로 만들어지지 않았으면
-        (되돌릴 애셋이 HEAD 그대로였음) journal 을 전부 지우고 undo 는 None.
+        버리기 전 상태를 담은 스냅샷 하나만 '실행 취소 지점'(undo)으로 남기고 나머지
+        journal(이번 되돌리기 결과 스냅샷 포함)은 지운다. undo 는 정리 뒤에도 남는 스냅샷이다:
+        새로 만든 안전 스냅샷(journal)이거나, 안전 스냅샷을 새로 만들지 않았으면(되돌릴 애셋이
+        HEAD 그대로였음) 그 시점 HEAD — 그 HEAD 와 같은 트리를 가진 확정 버전(fix)이 있으면
+        그쪽을 쓰고 HEAD journal 은 지운다. 남길 게 없으면 undo 는 None.
         """
         r = self.apply_restore(self.plan_revert_to_baseline(assets), **kw)
-        keep = [r.safety.id] if (r.safety_created and r.safety is not None) else []
+        undo_id = None
+        if r.safety is not None:
+            if r.safety_created or r.safety.role == "fix":
+                undo_id = r.safety.id
+            else:
+                undo_id = self._fix_with_same_tree(r.safety.id) or r.safety.id
+        keep = [undo_id] if undo_id is not None else []
         cleared = self._clear_journals(keep=keep)
-        undo = self.get(keep[0]) if keep else None
+        undo = self.get(undo_id) if undo_id is not None else None
         return replace(r, undo=undo, cleared=cleared)
+
+    def _fix_with_same_tree(self, sid: int) -> int | None:
+        """스냅샷 <sid> 와 내용이 같은 확정 버전(fix) 의 id. 없으면 None.
+
+        정리로 사라질 journal 대신 '같은 상태를 담은, 지워지지 않는 확정 버전' 을 실행 취소
+        지점으로 쓰기 위한 것.
+        """
+        want = {rel: e.sha for rel, e in self.tree(sid).items()}
+        for f in self.fix_log():
+            if f.id == sid:
+                continue
+            if {rel: e.sha for rel, e in self.tree(f.id).items()} == want:
+                return f.id
+        return None
 
     def _plan_to_target(self, s: Snapshot, target_tree: dict[str, TreeEntry],
                         assets: list[str] | None, what: str) -> "RestorePlan":

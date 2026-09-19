@@ -9,7 +9,7 @@ op 'reload' : args.discard_dirty 가 아니고 dirty 대상이 있으면 {ok:fal
               아니면 존재하는 패키지를 load_package → reload_packages(ASSUME_POSITIVE),
               대상 폴더를 scan_paths_synchronous(force_rescan) 로 추가/삭제 반영 → {ok, reloaded:n}
 
-콘텐츠 브라우저 애셋 우클릭 → 'Jokate' 서브메뉴 (올리기 / 마지막으로 올린 상태로 되돌리기 / 히스토리·변경사항 웹).
+콘텐츠 브라우저 애셋 우클릭 → 'Jokate' 서브메뉴 (확정 / 변경 버리기 / 히스토리·확정 안 된 변경 웹).
 HTTP 는 반드시 백그라운드 스레드에서: 되돌리기 요청은 서버가 이 브릿지(같은 에디터 틱)에 dirty/reload 를
 물어보므로 게임 스레드에서 동기로 부르면 데드락. 결과는 _RESULTS 큐 → _tick 에서 unreal.log + 모달 창.
 되돌리기 흐름: 메뉴 → (워커) revert_preview → (틱) 드라이런 확인창 YES/NO → (워커) revert POST
@@ -54,7 +54,7 @@ _menu_registered = False
 _dialog_open = False  # 모달이 떠 있는 동안 큐 처리 재진입 금지
 SERVE_HINT = "먼저 python -m jokate serve <프로젝트> 를 실행하세요"
 DEAD_DAEMON = "데몬이 꺼져 있습니다 — start.bat 을 실행하거나 에디터를 다시 시작하세요"
-RESTORE_TITLE = "Jokate 되돌리기"
+RESTORE_TITLE = "Jokate 변경 버리기"
 
 
 # ---- 콘텐츠 브라우저 메뉴 ----
@@ -97,14 +97,14 @@ def _msg_box(title, text, yes_no=False):
 
 
 def _do_snap(base, names, rels):
-    message = "에디터에서 올림: %s %d개" % (", ".join(names[:5]) + (" …" if len(names) > 5 else ""), len(names))
+    message = "에디터에서 확정: %s %d개" % (", ".join(names[:5]) + (" …" if len(names) > 5 else ""), len(names))
     code, j = _client.snap_only(base, message, rels)
     if code == 200 and j.get("snapshot"):
-        _report("log", "[jokate] 스냅샷 #%s 생성 (%d개)" % (j["snapshot"]["id"], len(rels)))
+        _report("log", "[jokate] 확정 #%s (%d개)" % (j["snapshot"]["id"], len(rels)))
     elif code == 200:
-        _alert("Jokate 올리기", "변경 없음 — 스냅샷을 만들지 않았습니다.")
+        _alert("Jokate 확정", "변경 없음 — 확정하지 않았습니다.")
     else:
-        _alert("Jokate 올리기", "올리기 실패 %s: %s" % (code, j.get("error", j)))
+        _alert("Jokate 확정", "확정 실패 %s: %s" % (code, j.get("error", j)))
 
 
 def _do_preview(base, rels):
@@ -168,11 +168,11 @@ def _do_snap_now(base):
     code, j = _client.snap_now(base)
     j = j or {}
     if code == 200 and j.get("snapshot"):
-        _report("log", "[jokate] 스냅샷 #%s 생성" % j["snapshot"]["id"])
+        _report("log", "[jokate] 확정 #%s" % j["snapshot"]["id"])
     elif code == 200:
-        _alert("Jokate", "변경 없음 - 스냅샷을 만들지 않았습니다.", warn=False)
+        _alert("Jokate", "변경 없음 - 확정하지 않았습니다.", warn=False)
     else:
-        _alert("Jokate", "스냅샷 실패 %s: %s" % (code, j.get("error", j)))
+        _alert("Jokate", "확정 실패 %s: %s" % (code, j.get("error", j)))
 
 
 def _do_state(base):
@@ -220,10 +220,10 @@ def _action(kind):
     names = [n for _, n, _ in sel]
     rels = [r for _, _, r in sel]
     if kind == "snap":
-        unreal.log("[jokate] 올리는 중… (%d개)" % len(rels))
+        unreal.log("[jokate] 확정하는 중… (%d개)" % len(rels))
         _run_bg(_do_snap, base, names, rels)
     elif kind == "restore":
-        unreal.log("[jokate] 마지막으로 올린 상태 미리보기를 불러오는 중… (%d개)" % len(rels))
+        unreal.log("[jokate] 마지막 확정 상태 미리보기를 불러오는 중… (%d개)" % len(rels))
         _run_bg(_do_preview, base, rels)
     elif kind == "history":
         _open_web(asset_rel=rels[0])
@@ -233,11 +233,11 @@ def _action(kind):
 
 
 MENU_ITEMS = [
-    ("snap", "선택한 애셋 올리기(스냅샷)", "선택한 애셋만 부분 스냅샷으로 올립니다"),
-    ("restore", "선택한 애셋을 마지막으로 올린 상태로 되돌리기", "무엇이 바뀌는지 확인창을 먼저 띄웁니다"),
+    ("snap", "선택한 애셋 확정", "선택한 애셋의 변경만 새 확정 버전으로 남깁니다"),
+    ("restore", "선택한 애셋 변경 버리기(마지막 확정 상태로)", "무엇이 바뀌는지 확인창을 먼저 띄웁니다"),
     ("history", "히스토리 열기(웹)", "첫 번째 선택 애셋의 버전 히스토리를 브라우저로"),
-    ("diff", "직전 스냅샷과 비교(diff)", "첫 번째 선택 애셋의 마지막 스냅샷 버전과 현재 파일을 diff 창으로"),
-    ("status", "현재 변경사항 보기(웹)", "마지막으로 올린 상태 대비 올리지 않은 변경"),
+    ("diff", "직전 버전과 비교(diff)", "첫 번째 선택 애셋의 마지막 버전과 현재 파일을 diff 창으로"),
+    ("status", "확정 안 된 변경 보기(웹)", "마지막 확정 상태 대비 확정 안 된 변경"),
 ]
 
 # 에디터 상단 '툴(Tools)' 메뉴의 Jokate 섹션
@@ -247,7 +247,7 @@ TOOLS_ITEMS = [
     ("bridge_off", "브릿지 끄기", "에디터 브릿지를 끕니다 (되돌리기/diff 연동 중단)"),
     ("daemon_start", "데몬 시작 / 재시작", "jokate 데몬을 띄우거나 최신 코드로 재시작합니다"),
     ("timeline", "타임라인 열기(웹)", "브라우저로 타임라인을 엽니다"),
-    ("snap_now", "지금 스냅샷", "지금 상태를 스냅샷으로 올립니다"),
+    ("snap_now", "지금 전부 확정", "지금 상태 전체를 새 확정 버전으로 남깁니다"),
     ("state", "상태 보기", "브릿지/데몬/포트 상태를 창으로 보여줍니다"),
 ]
 
@@ -679,8 +679,8 @@ def _handle_result(kind, payload):
     elif kind == "confirm_restore":
         preview, sid = payload["preview"], payload["sid"]
         if _client.preview_change_count(preview) == 0:
-            unreal.log("[jokate] 이미 마지막으로 올린 상태")
-            _msg_box(RESTORE_TITLE, "이미 마지막으로 올린 상태입니다 — 되돌릴 변경이 없습니다.")
+            unreal.log("[jokate] 이미 마지막 확정 상태")
+            _msg_box(RESTORE_TITLE, "이미 마지막 확정 상태입니다 — 버릴 변경이 없습니다.")
             return
         if _msg_box(RESTORE_TITLE, _client.format_preview(preview, sid), yes_no=True):
             unreal.log("[jokate] 되돌리는 중… (%d개)" % len(payload["rels"]))
