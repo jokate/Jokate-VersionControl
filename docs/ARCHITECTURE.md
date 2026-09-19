@@ -27,13 +27,25 @@
 - vendor 등급은 스냅샷에 포함하지 않는다
 - 옛 DB 는 `Store` 를 열 때 `ALTER TABLE tree ADD COLUMN noise` 로 자동 마이그레이션(기존 행 0)
 
+## 확정 버전과 작업 중 기록
+
+스냅샷은 `snapshots.role` 로 두 부류다 (`kind` 는 하위 호환으로 남는다).
+
+- `role='fix'` — **확정 버전**. 사용자가 `confirm` 한 것만. 영구 이력이라 prune 이 절대 지우지 않는다
+- `role='journal'` — **작업 중 기록**. 자동 저장, 되돌리기 안전 스냅샷, 되돌리기 결과. 확정하거나 변경을 버리는 순간 지워진다
+- `confirm(message, only=[rel])` — 기존 `upload` 와 같은 일(전체 작업 트리 스냅샷 + `uploaded` 기록 + baseline 갱신, `role='fix'`) 뒤에 **이 확정 이전의 journal 을 전부 지우고 gc** 한다. 일부만 확정해도 journal 은 전부 지운다 — 확정하지 않은 애셋의 현재 상태는 디스크와 새 fix 스냅샷의 tree 에 남아 계속 '확정 안 된 변경'으로 보인다. 확정할 게 없으면 `snapshot=None`(아무것도 안 지움). 반환 튜플에 `.cleared`(지운 journal 수). `upload` 는 별칭
+- `revert_to_baseline`(변경 버리기) — 적용에 성공하면 이번 되돌리기의 안전 스냅샷 하나만 '실행 취소 지점'(`RestoreResult.undo`)으로 남기고 나머지 journal(되돌리기 결과 포함)을 지운다. 안전 스냅샷이 새로 안 만들어졌으면(대상이 HEAD 와 같았음) 전부 지우고 `undo=None`. 남은 지점은 다음 확정·다음 버리기 때 사라진다
+- `plan_restore`/`apply_restore`(과거 버전으로) — 안전·결과 스냅샷 모두 `role='journal'`, `kind='auto'`. baseline 은 그대로라 되돌린 결과는 '확정 안 된 변경'으로 보이고, 확정하면 새 fix 가 된다
+- 조회: `log(role=None)` · `fix_log()` · `journal()` · `head_fix()`. `squash` 는 fix 끼리만 보호 확인(사슬에 낀 journal 은 함께 사라진다)
+- 마이그레이션(`ALTER TABLE snapshots ADD COLUMN role`): `uploaded` 가 있는 label → fix, `롤백…` label → journal, 그 밖의 label → fix, auto → journal. fix 가 하나도 없으면 가장 오래된 label 을 fix 로
+
 ## baseline 과 자동 기록
 
 '올린 것'과 '자동 기록'은 다른 축이다 (git 의 index/commit 대 autosave).
 
 - `baseline(rel, sha, size, cls, deps)` — 사용자가 **마지막으로 올린(인정한) 상태**. `snapshots.uploaded` 는 그 스냅샷에서 **이번에 올린 항목**만 담는 JSON(`{rel, state, old_sha, new_sha, old_rel?, size, cls, noise}`)
 - `status()` = baseline → 작업 트리 Diff. 자동 스냅샷(`kind=auto`)과 롤백은 baseline 을 건드리지 않으므로, 데몬이 5초 뒤 자동 기록을 남겨도 '올리지 않은 변경'은 그대로 남는다
-- `upload(message, only=[rel])` — 고른 변경만 baseline 에 반영(삭제는 baseline 에서 제거, 이동은 old/new 중 하나만 골라도 쌍으로). 스냅샷은 항상 **전체 작업 트리**로 찍고(HEAD 와 트리가 같아도 생성) `uploaded` 에 올린 항목을 기록한다. 올릴 게 없으면 `None`
+- `confirm(message, only=[rel])`(옛 이름 `upload`) — 고른 변경만 baseline 에 반영(삭제는 baseline 에서 제거, 이동은 old/new 중 하나만 골라도 쌍으로). 스냅샷은 항상 **전체 작업 트리**로 찍고(HEAD 와 트리가 같아도 생성) `uploaded` 에 올린 항목을 기록한다. 올릴 게 없으면 `None`
 - `show`/`log` 는 `uploaded` 가 있으면 그것을 Diff 로 보여주고(직전 대비가 아니라 '이번에 올린 것'), 없으면 직전 스냅샷 대비
 - `squash` 는 묶이는 스냅샷들의 `uploaded` 를 rel 기준으로 합친다(첫 `old_sha` + 마지막 `new_sha`, 결과가 같아지면 제외)
 - `gc`/`prune` 은 baseline 이 참조하는 sha 의 객체·meta 사이드카를 절대 지우지 않는다

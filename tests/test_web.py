@@ -149,7 +149,7 @@ def test_api_search(st: storemod.Store) -> None:
     assert web.api_search(st, "zzz")["snapshots"] == []
     # 변경 안 된 애셋은 그 스냅샷에서 일치하지 않음
     (st.cfg.content / "Foo" / "A.uasset").write_bytes(b"AAAA-v3")
-    st.snap("third")
+    st.snap("")                # 작업 중 기록(확정하면 지워지므로 여기서는 자동 저장으로)
     assert [x["id"] for x in web.api_search(st, "b.uasset")["snapshots"]] == [2]
     assert [x["id"] for x in web.api_search(st, "a.uasset")["snapshots"]] == [3, 2, 1]
     assert len(web.api_search(st, "a.uasset", limit=2)["snapshots"]) == 2

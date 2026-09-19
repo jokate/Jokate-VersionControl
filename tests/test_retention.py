@@ -134,7 +134,8 @@ def test_restore_after_delete(st: storemod.Store) -> None:
 
 
 def label(st: storemod.Store, sid: int, msg: str) -> None:
-    st.db.execute("UPDATE snapshots SET kind='label', message=? WHERE id=?", (msg, sid))
+    """그 스냅샷을 확정 버전(fix)으로 만든다 — squash 보호 대상."""
+    st.db.execute("UPDATE snapshots SET kind='label', role='fix', message=? WHERE id=?", (msg, sid))
     st.db.commit()
 
 

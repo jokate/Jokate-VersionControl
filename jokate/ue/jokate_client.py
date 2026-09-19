@@ -123,6 +123,19 @@ def snap_only(base, message, rels):
     return _call(base, "/api/snap", {"message": message, "only": list(rels)})
 
 
+def confirm_assets(base, message, rels=None):
+    """확정: POST /api/confirm → (code, json). rels 가 없으면 확정 안 된 변경 전부."""
+    body = {"message": message}
+    if rels:
+        body["only"] = list(rels)
+    return _call(base, "/api/confirm", body)
+
+
+def discard_assets(base, rels, discard_dirty=False):
+    """변경 버리기: POST /api/discard → (code, json). 마지막 확정 상태로 되돌린다."""
+    return _call(base, "/api/discard", {"assets": list(rels), "discard_dirty": bool(discard_dirty)})
+
+
 def restore_assets(base, sid, rels, discard_dirty=False):
     return _call(base, "/api/restore/%d" % int(sid), {"assets": list(rels), "discard_dirty": bool(discard_dirty)})
 

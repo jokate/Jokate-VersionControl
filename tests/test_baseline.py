@@ -67,9 +67,10 @@ def test_upload_creates_snapshot_even_if_tree_same(project: Path) -> None:
     st.upload("처음 올림")
     (project / "Content" / "Foo" / "A.uasset").write_bytes(b"AAAA-v2")
     st.snap("")                       # auto 가 이미 전체 트리를 담았다
-    n = len(st.log())
+    n = len(st.fix_log())
     snap, d, _ = st.upload("올림")
-    assert snap is not None and len(st.log()) == n + 1
+    assert snap is not None and len(st.fix_log()) == n + 1
+    assert st.journal() == []          # 확정하면 그 전의 작업 중 기록은 사라진다
     assert [n2.rel for _, n2 in d.modified] == ["Foo/A.uasset"]
     assert st.status().empty
     st.close()
@@ -92,18 +93,19 @@ def test_upload_delete_and_move(project: Path) -> None:
     st.close()
 
 
-def test_revert_to_baseline_keeps_auto_history(project: Path) -> None:
+def test_revert_to_baseline_clears_journal(project: Path) -> None:
     content = project / "Content" / "Foo"
     st = _st(project)
     st.upload("처음 올림")
     content.joinpath("A.uasset").write_bytes(b"AAAA-v2")
     content.joinpath("B.uasset").write_bytes(b"BBBB-v2")
     st.snap("")                         # 안전망 자동 기록
-    n_before = len(st.log())
     r = st.revert_to_baseline(["Foo/A.uasset"], check_editor=False)
     assert content.joinpath("A.uasset").read_bytes() == b"AAAA-v1"
     assert content.joinpath("B.uasset").read_bytes() == b"BBBB-v2"
-    assert r.written == 1 and len(st.log()) > n_before      # 자동 기록은 남는다
+    # 되돌릴 애셋이 HEAD 그대로였으므로 실행 취소 지점은 없고 작업 중 기록은 전부 정리된다
+    assert r.written == 1 and r.undo is None and r.cleared == 2
+    assert st.journal() == [] and [s.role for s in st.log()] == ["fix"]
     d = st.status()
     assert [n.rel for _, n in d.modified] == ["Foo/B.uasset"]
     st.close()

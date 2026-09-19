@@ -3,7 +3,9 @@
 
 - 객체: <project>/.jokate/store/objects/<sha[:2]>/<sha>  (원본 그대로, 압축 없음, 내용주소)
 - 인덱스: <project>/.jokate/index.sqlite
-    snapshots(id, parent, kind auto|label, message, ts)
+    snapshots(id, parent, kind auto|label, message, ts, role fix|journal)
+      role='fix'     확정 버전 — 영구 이력 (사용자가 확정한 것)
+      role='journal' 작업 중 기록 — 자동 저장·되돌리기 안전 스냅샷 등, 확정하면 지워진다
     tree(snapshot_id, rel, sha, size, cls, deps, noise)
 - authored 등급만 대상. 변경 판단은 mtime 이 아니라 sha 비교.
 - noise: HEAD 대비 sha 는 바뀌었지만 export 직렬화 바이트는 동일(리세이브만)인 항목 표시.
@@ -31,7 +33,8 @@ CREATE TABLE IF NOT EXISTS snapshots(
     parent  INTEGER,
     kind    TEXT NOT NULL CHECK(kind IN ('auto','label')),
     message TEXT NOT NULL DEFAULT '',
-    ts      REAL NOT NULL
+    ts      REAL NOT NULL,
+    role    TEXT NOT NULL DEFAULT 'journal'
 );
 CREATE TABLE IF NOT EXISTS tree(
     snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
@@ -75,6 +78,14 @@ class Snapshot:
     kind: str
     message: str
     ts: float
+    role: str = "journal"    # 'fix'(확정 버전) | 'journal'(작업 중 기록)
+
+    @property
+    def is_fix(self) -> bool:
+        return self.role == "fix"
+
+
+SNAP_COLS = "id,parent,kind,message,ts,role"
 
 
 @dataclass
@@ -132,7 +143,30 @@ class Store:
         if "uploaded" not in scols:
             self.db.execute("ALTER TABLE snapshots ADD COLUMN uploaded TEXT NOT NULL DEFAULT ''")
             self.db.commit()
+        # 마이그레이션: snapshots.role (확정 버전 fix / 작업 중 기록 journal)
+        if "role" not in scols:
+            self.db.execute("ALTER TABLE snapshots ADD COLUMN role TEXT NOT NULL DEFAULT 'journal'")
+            self._migrate_roles()
         self._init_baseline()
+
+    def _migrate_roles(self) -> None:
+        """옛 저장소의 kind/uploaded/message 로 role 을 정한다.
+
+        올린 기록이 있는 label → fix, '롤백…' label → journal, 그 밖의 label(옛 수동 스냅샷) → fix,
+        auto → journal. fix 가 하나도 없으면 가장 오래된 label 을 fix 로 올린다.
+        """
+        cur = self.db.cursor()
+        cur.execute("UPDATE snapshots SET role='fix' WHERE kind='label' AND uploaded<>''")
+        cur.execute("UPDATE snapshots SET role='journal' "
+                    "WHERE kind='label' AND uploaded='' AND message LIKE '롤백%'")
+        cur.execute("UPDATE snapshots SET role='fix' "
+                    "WHERE kind='label' AND uploaded='' AND message NOT LIKE '롤백%'")
+        cur.execute("UPDATE snapshots SET role='journal' WHERE kind='auto'")
+        if not cur.execute("SELECT COUNT(*) FROM snapshots WHERE role='fix'").fetchone()[0]:
+            row = cur.execute("SELECT id FROM snapshots WHERE kind='label' ORDER BY id LIMIT 1").fetchone()
+            if row:
+                cur.execute("UPDATE snapshots SET role='fix' WHERE id=?", (row[0],))
+        self.db.commit()
 
     # ---- baseline (사용자가 마지막으로 올린 상태) ----
     def _init_baseline(self) -> None:
@@ -191,16 +225,36 @@ class Store:
 
     # ---- snapshots ----
     def head(self) -> Snapshot | None:
-        row = self.db.execute("SELECT id,parent,kind,message,ts FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+        row = self.db.execute(f"SELECT {SNAP_COLS} FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+        return Snapshot(*row) if row else None
+
+    def head_fix(self) -> Snapshot | None:
+        """마지막 확정 버전(없으면 None)."""
+        row = self.db.execute(
+            f"SELECT {SNAP_COLS} FROM snapshots WHERE role='fix' ORDER BY id DESC LIMIT 1").fetchone()
         return Snapshot(*row) if row else None
 
     def get(self, sid: int) -> Snapshot | None:
-        row = self.db.execute("SELECT id,parent,kind,message,ts FROM snapshots WHERE id=?", (sid,)).fetchone()
+        row = self.db.execute(f"SELECT {SNAP_COLS} FROM snapshots WHERE id=?", (sid,)).fetchone()
         return Snapshot(*row) if row else None
 
-    def log(self) -> list[Snapshot]:
-        rows = self.db.execute("SELECT id,parent,kind,message,ts FROM snapshots ORDER BY id DESC").fetchall()
+    def log(self, role: str | None = None) -> list[Snapshot]:
+        """최신순 스냅샷 목록. role='fix'|'journal' 이면 그것만."""
+        q = f"SELECT {SNAP_COLS} FROM snapshots"
+        args: tuple = ()
+        if role:
+            q += " WHERE role=?"
+            args = (role,)
+        rows = self.db.execute(q + " ORDER BY id DESC", args).fetchall()
         return [Snapshot(*r) for r in rows]
+
+    def fix_log(self) -> list[Snapshot]:
+        """확정 버전만(최신순)."""
+        return self.log(role="fix")
+
+    def journal(self) -> list[Snapshot]:
+        """작업 중 기록만(최신순)."""
+        return self.log(role="journal")
 
     def tree(self, sid: int | None) -> dict[str, TreeEntry]:
         if sid is None:
@@ -238,19 +292,21 @@ class Store:
         self._mark_noise(base, list(work.values()))  # 올리기 전에도 리세이브만인지 보이게
         return diff_trees(base, work)
 
-    def upload(self, message: str = "", only: list[str] | None = None) -> tuple[Snapshot | None, Diff, int]:
-        """사용자가 '올리기': 고른 변경을 baseline 에 반영하고 label 스냅샷을 남긴다.
+    def confirm(self, message: str = "", only: list[str] | None = None) -> "ConfirmResult":
+        """확정: 고른 변경을 baseline 에 반영하고 fix(확정 버전) 스냅샷을 남긴다.
 
-        스냅샷은 항상 '전체 작업 트리'로 찍고(HEAD 와 같아도 생성) uploaded 에 이번에 올린 항목만 기록한다.
-        only 가 있으면 그 rel 들만(이동은 old/new 중 하나만 골라도 쌍으로). 올릴 게 없으면 (None, 빈 Diff, 0).
-        반환 (snapshot|None, 이번에 올린 diff, 새 객체 수).
+        스냅샷은 항상 '전체 작업 트리'로 찍고(HEAD 와 같아도 생성) uploaded 에 이번에 확정한 항목만 기록한다.
+        only 가 있으면 그 rel 들만(이동은 old/new 중 하나만 골라도 쌍으로). 확정할 게 없으면 (None, 빈 Diff, 0, 0).
+        확정 뒤에는 이 확정 이전의 작업 중 기록(journal)을 전부 지우고 객체 GC 를 돌린다 —
+        확정하지 않은 애셋의 현재 상태는 디스크와 새 fix 스냅샷의 tree 에 그대로 남는다.
+        반환 (snapshot|None, 이번에 확정한 diff, 새 객체 수) + .cleared(지운 journal 수).
         """
         base = self.baseline()
         work = self._work_tree()
         self._mark_noise(base, list(work.values()))
         sel = _select_diff(diff_trees(base, work), only)
         if sel.empty:
-            return None, sel, 0
+            return ConfirmResult(None, sel, 0, 0)
         items = _uploaded_items(sel)
         parent = self.head()
         old_tree = self.tree(parent.id if parent else None)
@@ -261,8 +317,9 @@ class Store:
             if self.put_object(self.cfg.content / e.rel, e.sha):
                 stored += 1
         cur = self.db.cursor()
-        cur.execute("INSERT INTO snapshots(parent,kind,message,ts,uploaded) VALUES(?,?,?,?,?)",
-                    (parent.id if parent else None, "label", message, time.time(), json.dumps(items)))
+        cur.execute("INSERT INTO snapshots(parent,kind,message,ts,uploaded,role) VALUES(?,?,?,?,?,?)",
+                    (parent.id if parent else None, "label", message, time.time(),
+                     json.dumps(items), "fix"))
         sid = cur.lastrowid
         cur.executemany("INSERT INTO tree(snapshot_id,rel,sha,size,cls,deps,noise) VALUES(?,?,?,?,?,?,?)",
                         [(sid, e.rel, e.sha, e.size, e.cls, json.dumps(e.deps), int(e.noise)) for e in rows])
@@ -270,7 +327,27 @@ class Store:
         drop = [e.rel for e in sel.deleted] + [o.rel for o, _ in sel.moved]
         self._write_baseline(put, drop)
         self.db.commit()
-        return self.get(sid), sel, stored
+        cleared = self._clear_journals(before=sid)
+        return ConfirmResult(self.get(sid), sel, stored, cleared)
+
+    def upload(self, message: str = "", only: list[str] | None = None) -> "ConfirmResult":
+        """confirm 의 옛 이름(별칭)."""
+        return self.confirm(message, only=only)
+
+    def _clear_journals(self, *, before: int | None = None, keep: list[int] | None = None) -> int:
+        """작업 중 기록(journal)을 지운다. before 를 주면 그보다 앞선 것만, keep 의 id 는 남긴다.
+
+        HEAD 여도 지운다(확정·변경 버리기 뒤에는 journal 이 HEAD 일 수 있다). 지운 게 있으면 GC.
+        """
+        keep_ids = {int(i) for i in (keep or [])}
+        ids = [s.id for s in self.log(role="journal")
+               if s.id not in keep_ids and (before is None or s.id < before)]
+        if not ids:
+            return 0
+        n = self.delete_snapshots(ids, keep_head=False)
+        if n:
+            self.gc()
+        return n
 
     def uploaded_diff(self, sid: int) -> Diff | None:
         """스냅샷에 기록된 '이번에 올린 것' → Diff. 기록이 없으면 None."""
@@ -279,19 +356,22 @@ class Store:
             return None
         return _diff_from_uploaded(json.loads(row[0]))
 
-    def snap(self, message: str = "", *, kind: str | None = None,
+    def snap(self, message: str = "", *, kind: str | None = None, role: str | None = None,
              force: bool = False, only: list[str] | None = None) -> tuple[Snapshot | None, Diff, int]:
         """작업 트리를 스냅샷으로 저장. 반환 (snapshot|None(변경 없음), diff, 새 객체 수).
 
-        kind 를 주지 않고 message 가 있으면 사용자 '올리기'(upload) 로 넘긴다(하위 호환).
+        kind 를 주지 않고 message 가 있으면 '확정'(confirm) 으로 넘긴다(하위 호환).
+        role 을 주지 않으면 kind='label' 은 fix, kind='auto' 는 journal.
         kind 를 직접 준 호출은 내부용: only 가 있으면 부분 스냅샷 — HEAD 트리 복사본에 only 의 rel 만
         디스크 상태로 갱신(디스크에 없으면 제거), 나머지는 HEAD 그대로. only 의 rel 이 HEAD 에도
         디스크에도 없으면 KeyError. baseline 은 건드리지 않는다.
         """
         if kind is None:
             if message:
-                return self.upload(message, only=only)
+                return self.confirm(message, only=only)
             kind = "auto"
+        if role is None:
+            role = "fix" if kind == "label" else "journal"
         work = self._work_tree()
         parent = self.head()
         old_tree = self.tree(parent.id if parent else None)
@@ -319,8 +399,8 @@ class Store:
             if self.put_object(self.cfg.content / e.rel, e.sha):
                 stored += 1
         cur = self.db.cursor()
-        cur.execute("INSERT INTO snapshots(parent,kind,message,ts) VALUES(?,?,?,?)",
-                    (parent.id if parent else None, kind, message, time.time()))
+        cur.execute("INSERT INTO snapshots(parent,kind,message,ts,role) VALUES(?,?,?,?,?)",
+                    (parent.id if parent else None, kind, message, time.time(), role))
         sid = cur.lastrowid
         cur.executemany("INSERT INTO tree(snapshot_id,rel,sha,size,cls,deps,noise) VALUES(?,?,?,?,?,?,?)",
                         [(sid, e.rel, e.sha, e.size, e.cls, json.dumps(e.deps), int(e.noise))
@@ -351,8 +431,17 @@ class Store:
         return self._plan_to_target(pseudo, self.baseline(), assets, "baseline")
 
     def revert_to_baseline(self, assets: list[str] | None = None, **kw) -> "RestoreResult":
-        """계획 + 적용 한 번에 (apply_restore 의 안전 스냅샷·dirty 차단·reload 로직 그대로)."""
-        return self.apply_restore(self.plan_revert_to_baseline(assets), **kw)
+        """변경 버리기: 마지막 확정 상태로 되돌리고 작업 중 기록을 정리한다.
+
+        되돌리기 전 상태를 담은 안전 스냅샷 하나만 '실행 취소 지점'(undo)으로 남기고 나머지
+        journal(이번 되돌리기 결과 스냅샷 포함)은 지운다. 안전 스냅샷이 새로 만들어지지 않았으면
+        (되돌릴 애셋이 HEAD 그대로였음) journal 을 전부 지우고 undo 는 None.
+        """
+        r = self.apply_restore(self.plan_revert_to_baseline(assets), **kw)
+        keep = [r.safety.id] if (r.safety_created and r.safety is not None) else []
+        cleared = self._clear_journals(keep=keep)
+        undo = self.get(keep[0]) if keep else None
+        return replace(r, undo=undo, cleared=cleared)
 
     def _plan_to_target(self, s: Snapshot, target_tree: dict[str, TreeEntry],
                         assets: list[str] | None, what: str) -> "RestorePlan":
@@ -471,7 +560,7 @@ class Store:
         only_before = [r for r in affected if r in work_now or r in head_tree]
         safety = None
         if only_before:
-            safety, _, _ = self.snap(f"롤백 직전 {tag}", kind="auto", only=only_before)
+            safety, _, _ = self.snap(f"롤백 직전 {tag}", kind="auto", role="journal", only=only_before)
         safety_created = safety is not None
         if safety is None:   # 되돌릴 애셋의 디스크 상태가 HEAD 그대로 → HEAD 가 곧 '롤백 직전'
             safety = head if head is not None else self.head()
@@ -522,22 +611,22 @@ class Store:
         only_after = [r for r in affected if r in work2 or r in tree2]
         result = None
         if only_after:
-            result, _, _ = self.snap(f"롤백: {tag}", kind="label", only=only_after)
+            result, _, _ = self.snap(f"롤백: {tag}", kind="auto", role="journal", only=only_after)
         if result is None:   # 이론상 없음 (바뀐 게 없으면 plan.diff 가 비었다)
             result = self.head()
         return RestoreResult(safety=safety, result=result, written=written, deleted=deleted_files,
                              reloaded=reloaded, safety_created=safety_created)
 
     # ---- 정리(보관기간·묶기·GC) ----
-    def delete_snapshots(self, ids: list[int]) -> int:
-        """스냅샷 여러 개 삭제(한 트랜잭션). HEAD 는 절대 지우지 않는다.
+    def delete_snapshots(self, ids: list[int], *, keep_head: bool = True) -> int:
+        """스냅샷 여러 개 삭제(한 트랜잭션). 기본적으로 HEAD 는 지우지 않는다(keep_head=False 면 지움).
 
         지우는 스냅샷을 parent 로 가진 스냅샷은 (연쇄적으로) 살아남는 조상으로 다시 잇고,
         부모가 바뀐 스냅샷의 tree.noise 는 새 부모 기준으로 다시 계산한다. 반환: 지운 개수.
         """
         head = self.head()
         want = {int(i) for i in ids}
-        if head is not None:
+        if keep_head and head is not None:
             want.discard(head.id)
         parents = {s.id: s.parent for s in self.log()}
         targets = sorted(i for i in want if i in parents)
@@ -594,15 +683,16 @@ class Store:
                 raise ValueError(f"#{a.id} → #{b.id} 는 연속된 사슬이 아니다")
         keep = snaps[-1]
         if not include_labels:
-            doomed = [(s.id, s.message) for s in snaps[:-1] if s.kind == "label"]
+            doomed = [(s.id, s.message) for s in snaps[:-1] if s.role == "fix"]
             if doomed:
                 raise SquashHasLabels(
-                    "묶으면 이름 붙인 스냅샷 "
+                    f"확정 버전 {len(doomed)}개가 하나로 합쳐진다: "
                     + ", ".join(f"#{i} ({m})".rstrip() for i, m in doomed)
                     + " 가 함께 사라진다", doomed)
+        # 묶인 결과는 확정 버전 (사슬에 끼어 있던 작업 중 기록은 함께 지워진다)
         merged = _merge_uploaded([self.db.execute("SELECT uploaded FROM snapshots WHERE id=?", (s.id,)).fetchone()[0]
                                   for s in snaps])
-        self.db.execute("UPDATE snapshots SET kind='label', message=?, uploaded=? WHERE id=?",
+        self.db.execute("UPDATE snapshots SET kind='label', role='fix', message=?, uploaded=? WHERE id=?",
                         (message, json.dumps(merged) if merged else "", keep.id))
         removed = self.delete_snapshots([s.id for s in snaps[:-1]])
         self.db.commit()
@@ -613,7 +703,7 @@ class Store:
 
     def prune(self, auto_days: int = 14, keep_last_auto: int = 30,
               now: float | None = None, dry_run: bool = False) -> list[int]:
-        """오래된 auto 스냅샷 정리. label·HEAD·최신 keep_last_auto 개는 남긴다.
+        """오래된 작업 중 기록(journal 의 auto) 정리. 확정 버전(fix)·HEAD·최신 keep_last_auto 개는 남긴다.
 
         auto_days 가 0 이하면 아무것도 하지 않는다. 반환: 지울(지운) id 목록(오름차순).
         """
@@ -622,7 +712,7 @@ class Store:
         now = time.time() if now is None else now
         cutoff = now - auto_days * 86400
         head = self.head()
-        autos = [s for s in self.log() if s.kind == "auto"]        # id 내림차순
+        autos = [s for s in self.log() if s.kind == "auto" and s.role != "fix"]   # id 내림차순
         keep_ids = {s.id for s in autos[:max(0, keep_last_auto)]}
         victims = sorted(s.id for s in autos
                          if s.ts < cutoff and s.id not in keep_ids and (head is None or s.id != head.id))
@@ -694,6 +784,27 @@ class Store:
 
     def close(self) -> None:
         self.db.close()
+
+
+class ConfirmResult(tuple):
+    """(snapshot|None, diff, 새 객체 수) 튜플 — 하위 호환. .cleared 로 지운 작업 중 기록 수."""
+
+    def __new__(cls, snapshot, diff, stored: int, cleared: int = 0):
+        obj = super().__new__(cls, (snapshot, diff, stored))
+        obj.cleared = cleared
+        return obj
+
+    @property
+    def snapshot(self):
+        return self[0]
+
+    @property
+    def diff(self):
+        return self[1]
+
+    @property
+    def stored(self) -> int:
+        return self[2]
 
 
 class GCResult(tuple):
@@ -793,6 +904,8 @@ class RestoreResult:
     deleted: int
     reloaded: int | None = None   # 브릿지로 에디터에 reload 한 패키지 수 (에디터 안 켜져 있으면 None)
     safety_created: bool = True   # 안전 스냅샷을 새로 만들었나 (False 면 safety 는 롤백 직전 HEAD)
+    undo: Snapshot | None = None  # 변경 버리기 뒤 남긴 '실행 취소 지점'(작업 중 기록) — 없으면 None
+    cleared: int = 0              # 변경 버리기가 지운 작업 중 기록 수
 
 
 def _affected_rels(d: Diff) -> list[str]:

@@ -55,7 +55,7 @@ def test_restore_roundtrip(project: Path) -> None:
     assert r.written == 2 and r.deleted == 2
     # 되돌릴 애셋들의 디스크 상태가 HEAD 그대로였으므로 안전 스냅샷은 새로 안 만든다 (HEAD 가 곧 직전 상태)
     assert r.safety.id == 2 and r.safety_created is False
-    assert r.result.id == 3 and r.result.kind == "label" and r.result.message == "롤백: #1"
+    assert r.result.id == 3 and r.result.role == "journal" and r.result.message == "롤백: #1"
     assert {(e.rel, e.sha) for e in st.tree(3).values()} == {(e.rel, e.sha) for e in st.tree(1).values()}
     # 롤백 직전 상태로 다시 되돌리면 원상복구
     st.apply_restore(st.plan_restore(2), check_editor=False)
@@ -238,7 +238,7 @@ def test_partial_snap_and_status(project: Path) -> None:
 def test_cli_status_and_snap_only(project: Path, capsys: pytest.CaptureFixture) -> None:
     assert cli.main(["snap", str(project), "-m", "first"]) == 0
     assert cli.main(["status", str(project)]) == 0
-    assert "올릴 변경 없음" in capsys.readouterr().out
+    assert "확정 안 된 변경 없음" in capsys.readouterr().out
     (project / "Content" / "Foo" / "A.uasset").write_bytes(b"AAAA-v2")
     (project / "Content" / "Foo" / "B.uasset").write_bytes(b"BBBB")
     assert cli.main(["status", str(project)]) == 0

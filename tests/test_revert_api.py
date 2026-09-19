@@ -50,8 +50,8 @@ def test_api_log_serializes_uploaded(st: storemod.Store) -> None:
     log = web.api_log(st)
     top = log[0]
     assert top["uploaded"] is True and top["counts"]["modified"] == 1 and top["counts"]["added"] == 0
-    assert log[2]["uploaded"] is True                    # #1 도 upload
-    assert log[1]["uploaded"] is False                   # auto
+    assert log[1]["uploaded"] is True                    # #1 도 확정
+    assert [x["role"] for x in log] == ["fix", "fix"]     # 작업 중 기록은 확정하며 사라진다
     assert web.api_snap(st, top["id"])["uploaded"] is True
 
 

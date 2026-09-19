@@ -91,8 +91,9 @@ def test_snap_marks_noise_and_cli(tmp_path: Path, capsys) -> None:
     assert "(리세이브만)" not in storemod.format_diff(d3)
     st.close()
 
-    assert cli.main(["log", str(root)]) == 0
-    out = capsys.readouterr().out.splitlines()
+    # 확정 모델: log 는 기본으로 확정 버전만. 자동 저장(#2, #3)은 작업 중 기록이라 --all 에서 들여써 보인다
+    assert cli.main(["log", str(root), "--all"]) == 0
+    out = [l.strip() for l in capsys.readouterr().out.splitlines()]
     line2 = next(l for l in out if l.startswith("#2"))
     line3 = next(l for l in out if l.startswith("#3"))
     line1 = next(l for l in out if l.startswith("#1"))

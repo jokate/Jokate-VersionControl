@@ -96,7 +96,7 @@ def _counts(d: Diff) -> dict:
 
 
 def _snapshot(s: Snapshot) -> dict:
-    return {"id": s.id, "parent": s.parent, "kind": s.kind, "message": s.message,
+    return {"id": s.id, "parent": s.parent, "kind": s.kind, "role": s.role, "message": s.message,
             "ts": s.ts, "time": format_ts(s.ts)}
 
 
@@ -147,20 +147,24 @@ def api_info(store: Store) -> dict:
                 size += p.stat().st_size
     disk = current_build()
     pending = sum(_counts(store.status()).values())
-    row = store.db.execute(
-        "SELECT id FROM snapshots WHERE kind='label' ORDER BY id DESC LIMIT 1").fetchone()
-    last_label = _snapshot(store.get(row[0])) if row else None
+    fix = store.head_fix()
+    last_label = _snapshot(fix) if fix else None
+    n_fixes = store.db.execute("SELECT COUNT(*) FROM snapshots WHERE role='fix'").fetchone()[0]
+    n_journal = store.db.execute("SELECT COUNT(*) FROM snapshots WHERE role<>'fix'").fetchone()[0]
     return {"project": store.cfg.root.name, "snapshots": n_snaps, "assets": n_assets,
             "objects": objects, "store_bytes": size, "last": _snapshot(head) if head else None,
             "pending": pending, "last_label": last_label,
+            "fixes": n_fixes, "journal": n_journal,
             "vendor": list(store.cfg.vendor),
             "build": BUILD_ID, "build_disk": disk, "stale": disk != BUILD_ID}
 
 
-def api_log(store: Store) -> list[dict]:
+def api_log(store: Store, role: str | None = None) -> list[dict]:
+    """타임라인. role='fix'(확정 버전만)·'journal'(작업 중 기록만)·None/'all'(전부)."""
+    want = role if role in ("fix", "journal") else None
     trees: dict[int | None, dict[str, TreeEntry]] = {None: {}}
     out = []
-    for s in store.log():
+    for s in store.log(role=want):
         for sid in (s.id, s.parent):
             if sid not in trees:
                 trees[sid] = store.tree(sid)
@@ -268,13 +272,23 @@ def api_status(store: Store) -> dict:
     return {"diff": _diff(d, _pkgs_after(base, d))}
 
 
-def api_snap_create(store: Store, message: str, only: list[str] | None = None) -> dict:
-    """사용자 올리기(upload). only 가 비면 올리지 않은 변경 전부, 올릴 게 없으면 snapshot=None."""
+def api_confirm(store: Store, message: str, only: list[str] | None = None) -> dict:
+    """확정(confirm). only 가 비면 확정 안 된 변경 전부, 확정할 게 없으면 snapshot=None.
+
+    응답의 cleared 는 이번 확정이 지운 작업 중 기록 수.
+    """
     only = [str(x) for x in (only or []) if str(x).strip()]
-    snap, d, stored = store.upload(message, only=only or None)
+    r = store.confirm(message, only=only or None)
+    snap, d, stored = r
     if snap is not None:
         metamod.capture_for_snapshot(store, d)
-    return {"snapshot": _snapshot(snap) if snap else None, "diff": _diff(d), "stored": stored}
+    return {"snapshot": _snapshot(snap) if snap else None, "diff": _diff(d), "stored": stored,
+            "cleared": r.cleared}
+
+
+def api_snap_create(store: Store, message: str, only: list[str] | None = None) -> dict:
+    """api_confirm 의 옛 이름(별칭)."""
+    return api_confirm(store, message, only)
 
 
 def api_metadiff(store: Store, a_sha: str, b_sha: str) -> dict:
@@ -322,14 +336,28 @@ def api_revert(store: Store, assets: list[str] | None = None) -> dict:
             "dependents": [{"rel": r, "dep": d} for r, d in plan.dependents]}
 
 
-def api_revert_apply(store: Store, assets: list[str] | None = None,
-                     discard_dirty: bool = False) -> dict:
-    """baseline 으로 되돌리기 적용. RestoreBlocked(→409) 규칙은 /api/restore 와 동일."""
-    plan = store.plan_revert_to_baseline(assets or None)
-    r = store.apply_restore(plan, discard_dirty=discard_dirty)
+def api_discard_apply(store: Store, assets: list[str] | None = None,
+                      discard_dirty: bool = False) -> dict:
+    """변경 버리기 적용(마지막 확정 상태로). RestoreBlocked(→409) 규칙은 /api/restore 와 동일.
+
+    응답의 undo 는 남긴 '실행 취소 지점'(없으면 None), cleared 는 지운 작업 중 기록 수.
+    """
+    r = store.revert_to_baseline(assets or None, discard_dirty=discard_dirty)
     return {"ok": True, "safety": _snapshot(r.safety), "result": _snapshot(r.result),
             "written": r.written, "deleted": r.deleted, "reloaded": r.reloaded,
-            "safety_created": r.safety_created}
+            "safety_created": r.safety_created,
+            "undo": _snapshot(r.undo) if r.undo is not None else None, "cleared": r.cleared}
+
+
+def api_discard(store: Store, assets: list[str] | None = None) -> dict:
+    """api_revert(변경 버리기 드라이런) 의 새 이름."""
+    return api_revert(store, assets)
+
+
+def api_revert_apply(store: Store, assets: list[str] | None = None,
+                     discard_dirty: bool = False) -> dict:
+    """api_discard_apply 의 옛 이름(별칭)."""
+    return api_discard_apply(store, assets, discard_dirty)
 
 
 def api_squash(store: Store, ids: list[int], message: str, include_labels: bool = False) -> dict:
@@ -518,7 +546,8 @@ def make_handler(cfg: Config, control=None):
                 elif path == "/api/info":
                     self._json(self._run(api_info))
                 elif path == "/api/log":
-                    self._json(self._run(api_log))
+                    role = q.get("role", ["all"])[0]
+                    self._json(self._run(lambda st: api_log(st, role)))
                 elif path == "/api/daemon":
                     self._json(api_daemon_get(control))
                 elif path == "/api/status":
@@ -545,9 +574,9 @@ def make_handler(cfg: Config, control=None):
                     if r is None:
                         raise NotFound("썸네일 없음")
                     self._send(200, r[1], r[0])
-                elif path == "/api/revert":
+                elif path in ("/api/revert", "/api/discard"):
                     assets = q.get("asset", [])
-                    self._json(self._run(lambda st: api_revert(st, assets)))
+                    self._json(self._run(lambda st: api_discard(st, assets)))
                 elif path == "/api/uediff/plan":
                     self._json(self._run(api_uediff_plan))
                 elif path.startswith("/api/restore/"):
@@ -568,20 +597,20 @@ def make_handler(cfg: Config, control=None):
                 body = json.loads(raw.decode("utf-8") or "{}")
                 if u.path == "/api/daemon":
                     self._json(api_daemon_post(control, str(body.get("action", ""))))
-                elif u.path == "/api/snap":
+                elif u.path in ("/api/snap", "/api/confirm"):
                     message = str(body.get("message", "")).strip()
                     if not message:
                         raise ValueError("message 필요")
                     only = body.get("only") or []
                     if not isinstance(only, list):
                         raise ValueError("only 는 rel 목록")
-                    self._json(self._run(lambda st: api_snap_create(st, message, only)))
-                elif u.path == "/api/revert":
+                    self._json(self._run(lambda st: api_confirm(st, message, only)))
+                elif u.path in ("/api/revert", "/api/discard"):
                     assets = body.get("assets") or []
                     if not isinstance(assets, list):
                         raise ValueError("assets 는 rel 목록")
                     discard = bool(body.get("discard_dirty", False))
-                    self._json(self._run(lambda st: api_revert_apply(st, [str(x) for x in assets], discard)))
+                    self._json(self._run(lambda st: api_discard_apply(st, [str(x) for x in assets], discard)))
                 elif u.path == "/api/squash":
                     ids = body.get("ids") or []
                     if not isinstance(ids, list):
